@@ -1,0 +1,8 @@
+# Software-rendering override (Mesa llvmpipe). Use when GPU passthrough does
+# not work on your machine. Slower, but works everywhere.
+#   docker compose -f docker-compose.yml -f docker-compose.software.yml up -d
+# or ./scripts/up.sh software
+services:
+  sim:
+    environment:
+      LIBGL_ALWAYS_SOFTWARE: "1"

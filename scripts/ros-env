@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Run a command with the ROS underlay and the workspace overlay sourced.
+# Usage (inside the container): ros-env ros2 topic list
+set -e
+source /opt/ros/humble/setup.bash
+if [ -f /ws/install/setup.bash ]; then source /ws/install/setup.bash; fi
+exec "$@"

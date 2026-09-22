@@ -1,0 +1,41 @@
+# Base configuration: works on any Linux host.
+# GPU: Intel/AMD direct rendering via /dev/dri (falls back to Mesa llvmpipe
+# automatically if no usable DRI device). For NVIDIA or forced software
+# rendering, layer an override file on top -- see README "GPU options".
+name: snn_robot_teleop
+
+services:
+  sim:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: snn_robot_teleop/sim:phase0
+    container_name: rover_sim
+    network_mode: host   # X11 socket + ROS 2 DDS / gz-transport discovery
+    ipc: host            # MIT-SHM for X11 and DDS shared-memory transport
+    stdin_open: true
+    tty: true
+    environment:
+      DISPLAY: ${DISPLAY:?DISPLAY is not set -- run from a graphical session (see README)}
+      QT_X11_NO_MITSHM: "1"
+      ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
+      ROS_LOCALHOST_ONLY: ${ROS_LOCALHOST_ONLY:-1}
+      LIBGL_ALWAYS_SOFTWARE: ${LIBGL_ALWAYS_SOFTWARE:-0}
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      # /dev/dri is bind-mounted (not listed under `devices:`) so the container
+      # still starts on hosts that have no DRI device; the cgroup rule below
+      # grants access to DRM devices (char major 226) when they exist.
+      - /dev/dri:/dev/dri
+      - ./src:/ws/src
+      - ./scripts:/ws/scripts
+      - ws_build:/ws/build
+      - ws_install:/ws/install
+      - ws_log:/ws/log
+    device_cgroup_rules:
+      - "c 226:* rmw"
+
+volumes:
+  ws_build:
+  ws_install:
+  ws_log:

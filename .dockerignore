@@ -1,0 +1,6 @@
+# Only package manifests are needed at build time (for rosdep); the sources
+# are bind-mounted at runtime. Everything else stays out of the build context.
+*
+!src/**/package.xml
+!scripts/entrypoint.sh
+!scripts/ros-env

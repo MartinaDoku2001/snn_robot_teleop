@@ -1,0 +1,20 @@
+# NVIDIA override. Requires nvidia-container-toolkit on the host
+# (`docker info | grep -i runtimes` must list `nvidia`).
+#   docker compose -f docker-compose.yml -f docker-compose.nvidia.yml up -d
+# or ./scripts/up.sh nvidia
+services:
+  sim:
+    environment:
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: all
+      # PRIME render offload: route GL to the NVIDIA GPU even on hybrid
+      # laptops where the X server runs on the iGPU. Harmless on desktops.
+      __NV_PRIME_RENDER_OFFLOAD: "1"
+      __GLX_VENDOR_LIBRARY_NAME: nvidia
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
