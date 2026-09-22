@@ -1,0 +1,7 @@
+# colcon artifacts (normally live in docker volumes, but ignore if built on host)
+build/
+install/
+log/
+__pycache__/
+*.pyc
+.env
