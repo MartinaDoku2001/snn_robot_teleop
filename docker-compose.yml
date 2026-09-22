@@ -18,6 +18,7 @@ services:
     environment:
       DISPLAY: ${DISPLAY:?DISPLAY is not set -- run from a graphical session (see README)}
       QT_X11_NO_MITSHM: "1"
+      PYTHONDONTWRITEBYTECODE: "1"   # no root-owned __pycache__ in the bind-mounted src/
       ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
       ROS_LOCALHOST_ONLY: ${ROS_LOCALHOST_ONLY:-1}
       LIBGL_ALWAYS_SOFTWARE: ${LIBGL_ALWAYS_SOFTWARE:-0}
