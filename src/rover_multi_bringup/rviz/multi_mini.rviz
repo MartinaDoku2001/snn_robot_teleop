@@ -1,0 +1,128 @@
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+Visualization Manager:
+  Class: ""
+  Global Options:
+    Fixed Frame: world
+    Background Color: 48; 48; 48
+    Frame Rate: 30
+  Displays:
+    - Class: rviz_default_plugins/Grid
+      Name: Grid
+      Enabled: true
+      Reference Frame: world
+      Plane Cell Count: 20
+      Cell Size: 1
+    - Class: rviz_default_plugins/TF
+      Name: TF
+      Enabled: true
+      Show Names: false
+      Show Axes: true
+      Marker Scale: 0.3
+    - Class: rviz_default_plugins/RobotModel
+      Name: robot1 model
+      Enabled: true
+      Description Source: Topic
+      Description Topic:
+        Value: /robot1/robot_description
+        Depth: 1
+        Durability Policy: Transient Local
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+      TF Prefix: robot1
+      Visual Enabled: true
+      Collision Enabled: false
+    - Class: rviz_default_plugins/Odometry
+      Name: robot1 odom
+      Enabled: true
+      Topic:
+        Value: /robot1/odom
+        Depth: 5
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Durability Policy: Volatile
+      Keep: 50
+      Shape:
+        Value: Arrow
+        Color: 255; 85; 0
+        Alpha: 1
+        Shaft Length: 0.3
+        Shaft Radius: 0.02
+        Head Length: 0.1
+        Head Radius: 0.05
+    - Class: rviz_default_plugins/LaserScan
+      Name: robot1 scan
+      Enabled: true
+      Topic:
+        Value: /robot1/scan
+        Depth: 5
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+        Durability Policy: Volatile
+      Color Transformer: FlatColor
+      Color: 255; 85; 0
+      Size (m): 0.03
+      Style: Flat Squares
+    - Class: rviz_default_plugins/RobotModel
+      Name: robot2 model
+      Enabled: true
+      Description Source: Topic
+      Description Topic:
+        Value: /robot2/robot_description
+        Depth: 1
+        Durability Policy: Transient Local
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+      TF Prefix: robot2
+      Visual Enabled: true
+      Collision Enabled: false
+    - Class: rviz_default_plugins/Odometry
+      Name: robot2 odom
+      Enabled: true
+      Topic:
+        Value: /robot2/odom
+        Depth: 5
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Durability Policy: Volatile
+      Keep: 50
+      Shape:
+        Value: Arrow
+        Color: 0; 170; 255
+        Alpha: 1
+        Shaft Length: 0.3
+        Shaft Radius: 0.02
+        Head Length: 0.1
+        Head Radius: 0.05
+    - Class: rviz_default_plugins/LaserScan
+      Name: robot2 scan
+      Enabled: true
+      Topic:
+        Value: /robot2/scan
+        Depth: 5
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+        Durability Policy: Volatile
+      Color Transformer: FlatColor
+      Color: 0; 170; 255
+      Size (m): 0.03
+      Style: Flat Squares
+  Tools:
+    - Class: rviz_default_plugins/MoveCamera
+    - Class: rviz_default_plugins/Select
+    - Class: rviz_default_plugins/Measure
+  Views:
+    Current:
+      Class: rviz_default_plugins/Orbit
+      Distance: 8
+      Focal Point:
+        X: 1
+        Y: 0
+        Z: 0
+      Pitch: 0.7
+      Yaw: 3.4
+      Target Frame: world
+Window Geometry:
+  Width: 1200
+  Height: 800

@@ -1,0 +1,34 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>rover_multi_bringup</name>
+  <version>0.1.0</version>
+  <description>
+    Multi-robot Gazebo (Fortress) bringup for Rover Robotics Mini robots.
+    Wraps the unmodified vendor description and namespaces each robot
+    (topics, gz-transport topics and tf frames).
+  </description>
+  <maintainer email="martina.doku.t7@dc.tohoku.ac.jp">Martina Doku</maintainer>
+  <license>Apache-2.0</license>
+
+  <exec_depend>roverrobotics_description</exec_depend>
+  <exec_depend>roverrobotics_gazebo</exec_depend>
+  <exec_depend>ros_gz_sim</exec_depend>
+  <exec_depend>ros_gz_bridge</exec_depend>
+  <exec_depend>robot_state_publisher</exec_depend>
+  <exec_depend>tf2_ros</exec_depend>
+  <exec_depend>xacro</exec_depend>
+  <exec_depend>rviz2</exec_depend>
+  <exec_depend>teleop_twist_keyboard</exec_depend>
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>nav_msgs</exec_depend>
+  <exec_depend>tf2_msgs</exec_depend>
+  <exec_depend>python3-yaml</exec_depend>
+
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

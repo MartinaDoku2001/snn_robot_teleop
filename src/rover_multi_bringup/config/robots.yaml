@@ -1,0 +1,13 @@
+# Robots spawned by multi_mini.launch.py. Each name becomes the ROS namespace,
+# the Gazebo model name, and the tf frame prefix (<name>/base_link, ...).
+# Poses are in the `world` frame (x, y in m; yaw in rad). Add entries to
+# spawn more robots.
+robots:
+  - name: robot1
+    x: 0.0
+    y: 1.0
+    yaw: 0.0
+  - name: robot2
+    x: 0.0
+    y: -1.0
+    yaw: 0.0
