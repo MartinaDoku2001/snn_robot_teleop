@@ -11,6 +11,9 @@ services:
       # laptops where the X server runs on the iGPU. Harmless on desktops.
       __NV_PRIME_RENDER_OFFLOAD: "1"
       __GLX_VENDOR_LIBRARY_NAME: nvidia
+      # Headless (EGL) rendering: enumerate only the NVIDIA GPU, so Gazebo's
+      # offscreen sensor rendering does not land on a Mesa-only DRM node.
+      __EGL_VENDOR_LIBRARY_FILENAMES: /usr/share/glvnd/egl_vendor.d/10_nvidia.json
     deploy:
       resources:
         reservations:

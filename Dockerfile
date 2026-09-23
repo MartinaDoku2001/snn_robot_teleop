@@ -36,6 +36,14 @@ RUN apt-get update \
 # Record exactly what ended up in the image (for cross-machine comparisons).
 RUN dpkg-query -W -f='${Package}=${Version}\n' | sort > /opt/image-packages.lock
 
+# The nvidia-container-toolkit injects libEGL_nvidia but not always its glvnd
+# vendor file. Without it, headless (EGL) rendering cannot see the NVIDIA GPU
+# and falls back to a DRM node Mesa cannot drive. Harmless on non-NVIDIA
+# hosts: glvnd skips a vendor whose library is missing.
+RUN mkdir -p /usr/share/glvnd/egl_vendor.d \
+    && printf '{\n    "file_format_version" : "1.0.0",\n    "ICD" : {\n        "library_path" : "libEGL_nvidia.so.0"\n    }\n}\n' \
+       > /usr/share/glvnd/egl_vendor.d/10_nvidia.json
+
 COPY scripts/entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY scripts/ros-env /usr/local/bin/ros-env
 RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/ros-env \

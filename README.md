@@ -107,12 +107,48 @@ Per robot `<ns>` you get:
 | `/<ns>/scan`, `/<ns>/imu/data` | lidar only publishes when render sensors are enabled |
 | tf | `world → <ns>/odom` (static, at the spawn pose) `→ <ns>/base_link → <ns>/chassis_link → …` on the global `/tf` |
 
+## Gazebo vs RViz: which window shows what
+
+They are not two views of the same thing, and you do not need both.
+
+| | Gazebo | RViz |
+|---|---|---|
+| What it is | the simulator: physics, the world, ground truth | a viewer for ROS topics |
+| Shows the obstacles and ground plane | yes, they live in `arena.sdf` | **no** -- nothing publishes them as ROS messages |
+| Shows the robots | ground-truth pose | pose from `/tf` + `/<ns>/odom`, model from `robot_description` |
+| Shows lidar, odometry, tf | only as optional overlays | yes, this is the point of it |
+| Needed to run the sim | yes (can be headless) | no |
+
+**Obstacles are missing in RViz because RViz only knows what the robots
+publish.** The orange and blue point arcs *are* those obstacles, seen by each
+robot's lidar. That is the view later phases care about: what a robot knows,
+rather than what is true.
+
+Three workflows, pick one:
+
+```bash
+./scripts/sim.sh                             # both windows (default)
+./scripts/sim.sh rviz:=false                 # Gazebo only: watch the world, lightest to understand
+./scripts/sim.sh gui:=false sensors:=true    # RViz only: headless physics, nicer robot rendering
+```
+
+The RViz-only mode runs the simulator with no Gazebo window and renders the
+lidar offscreen, so you still see the obstacle outlines. On this machine it
+ran at 31 fps with a slightly better real-time factor than the Gazebo GUI.
+It needs working offscreen (EGL) rendering: verified on the NVIDIA path, and
+it works on Intel/AMD where the first DRM device is the rendering one. If the
+scans stay empty, drop `sensors:=true` and you still get robots, tf and
+odometry.
+
+If you want the obstacles themselves drawn in RViz, that takes a small node
+publishing them as markers. Ask and I can add one.
+
 ## GPU options
 
 | Mode | How to start | When to use it |
 |---|---|---|
 | **Intel/AMD (default)** | `docker compose up -d` or `./scripts/up.sh dri` | Mesa GPUs. `/dev/dri` is passed through for direct rendering. If there is no usable device, Mesa falls back to llvmpipe on its own. |
-| **NVIDIA** | `docker compose -f docker-compose.yml -f docker-compose.nvidia.yml up -d` or `./scripts/up.sh nvidia` | Proprietary NVIDIA driver with nvidia-container-toolkit. `docker info` must list the `nvidia` runtime. This mode also enables PRIME render offload, so it works on hybrid laptops. |
+| **NVIDIA** | `docker compose -f docker-compose.yml -f docker-compose.nvidia.yml up -d` or `./scripts/up.sh nvidia` | Proprietary NVIDIA driver with nvidia-container-toolkit. `docker info` must list the `nvidia` runtime. This mode also enables PRIME render offload, so it works on hybrid laptops, and points offscreen (EGL) rendering at the NVIDIA GPU so headless lidar works. |
 | **Software** | `docker compose -f docker-compose.yml -f docker-compose.software.yml up -d` or `./scripts/up.sh software` | Anything else (VMs, broken drivers). Sets `LIBGL_ALWAYS_SOFTWARE=1`. It is slow but works everywhere. |
 
 `./scripts/up.sh` with no argument picks NVIDIA if `nvidia-smi` works and Docker
@@ -164,7 +200,7 @@ src/rover_multi_bringup/                our package
 - **A shared `world` frame.** Each robot gets a static `world → <ns>/odom` transform at its spawn pose. DiffDrive odometry starts at zero where the robot spawns, so this places both robots correctly in RViz.
 - **World.** `arena.sdf` is a flat 30×30 m plane with three static obstacles. The vendor worlds (`maze.sdf`, `depot.sdf`, `warehouse.sdf`) also work, for example `world:=$(ros2 pkg prefix roverrobotics_gazebo)/share/roverrobotics_gazebo/worlds/maze.sdf`. They don't load the Sensors or Imu systems, though, so lidar and IMU stay silent in them.
 - **Physics step stays at 1 ms.** The world uses the same step size as the vendor worlds. Measured headless on an i7 laptop with two robots, the real-time factor was 0.41 at 1 ms. A 2 ms step reached 0.79, but odometry went wrong (x went negative under a forward command). A 4 ms step made the wheel mesh contacts unstable, and RTF fell to 0.07. With GUI and RViz, RTF was about 0.25 on the Intel iGPU, 0.29 on the RTX 5060, and 0.31 on llvmpipe. So the limit is CPU physics, not rendering. Phase 0 accepts that; later phases can revisit it, for example with simplified collision shapes in our own URDF wrapper.
-- **Headless mode disables render sensors by default.** Offscreen (EGL) rendering picks the first DRM device. On hybrid laptops that can be a GPU with no usable driver in the container, and then gpu_lidar crashes the server. Driving, odometry, tf and the IMU need no rendering, so the headless smoke test is independent of the hardware. Force the lidar on with `sensors:=true`.
+- **Headless mode disables render sensors by default.** Offscreen (EGL) rendering picks the first DRM device. On a hybrid laptop that can be a GPU that Mesa cannot drive in the container, and then gpu_lidar crashes the server. Driving, odometry, tf and the IMU need no rendering, so the headless smoke test is independent of the hardware. Force the lidar on with `sensors:=true`; on NVIDIA the image supplies the glvnd EGL vendor file the container toolkit omits, and the NVIDIA override restricts EGL to that GPU, which makes headless lidar work.
 - **GPU default = `/dev/dri`.**
   - It works for Intel and AMD and degrades to llvmpipe on its own.
   - It is bind-mounted with a cgroup rule for DRM devices, not listed under `devices:`. As a result, the container still starts on hosts with no `/dev/dri`.
