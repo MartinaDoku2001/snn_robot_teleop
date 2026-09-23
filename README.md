@@ -264,22 +264,206 @@ the host, and use the same RMW implementation (the default is Fast DDS).
 **The first `docker compose up` seems stuck.**
 It is running `colcon build`. Watch it with `docker compose logs -f sim`.
 
+## Phase 1: the task and the evaluation harness
+
+Phase 1 adds the *measurement ruler*: a leader-follower task whose information
+demand varies over time, four baseline transmission policies, and the metrics
+and figures every later controller is judged by. No learning yet -- but the
+interfaces an RL policy and a spiking network plug into are fixed now.
+
+### The task
+
+`robot1` (leader) tracks a fixed closed path with pure pursuit and carries
+small bounded process noise. `robot2` (follower) holds a slot 0.8 m directly
+behind it, in the leader's body frame.
+
+The point is the middle step: **the follower never sees the leader's true
+state.** A communication interface decides, each step, whether the leader
+transmits. When it does, the follower's estimate is refreshed; when it does
+not, a *generic* constant-velocity predictor dead-reckons it forward. The
+predictor knows nothing about the path, so:
+
+| leader is... | predictor | messages needed |
+|---|---|---|
+| on a straight | near-exact | almost none |
+| in a steady turn | still exact (constant curvature) | almost none |
+| entering/leaving a turn, or pushed by noise | wrong, and drifting | many |
+
+That variation is deliberate and it is what a learned scheduler will exploit.
+
+### Two backends, one interface
+
+```
+                        formation_core (pure Python, no ROS, no RL)
+                        contract | policies | predictor | metrics | runner
+                                        |
+              +-------------------------+-------------------------+
+              |                                                   |
+    FastFormationEnv (kinematic twin)              GazeboFormationEnv + ROS nodes
+    thousands of steps/second, for training        Phase 0 /robot1, /robot2 topics
+```
+
+The same controller, policy and metrics code runs on both. Measured on the same
+config (20 s, event-triggered delta = 0.05):
+
+| | formation RMS | lateral RMS | leader path RMS | comm rate |
+|---|---|---|---|---|
+| fast twin | 0.0619 m | 0.0529 m | 0.0089 m | 0.018 |
+| Gazebo | 0.0573 m | 0.0523 m | 0.0088 m | 0.013 |
+
+### Running it
+
+All commands run inside the container (`docker compose exec sim bash`). The
+fast twin needs no simulator.
+
+```bash
+cd /ws/src/formation_core
+
+# one episode + figures  (results/episode/: episode.csv, errors.png, trajectory.png)
+python3 -m formation_core run --policy event_triggered --delta 0.05 --plot
+
+# the 8-seed evaluation suite, mean +- 95% CI across seeds
+python3 -m formation_core suite --suite configs/eval_suite.yaml
+python3 -m formation_core suite --suite configs/stress_suite.yaml --policy periodic --k 10
+
+# THE key artifact: the Pareto sweep over all three families, with the check
+python3 -m formation_core sweep --check --out results/sweep
+
+# unit tests (71)
+python3 -m pytest tests -q
+```
+
+`python3 -m formation_core <command>` works everywhere. The same entry points
+are installed as console scripts, reachable as
+`ros2 run formation_core formation-sweep` in the ROS workspace. Outside ROS the
+package is an ordinary pip install:
+
+```bash
+pip install -e src/formation_core     # numpy + pyyaml; matplotlib for figures
+```
+
+In Gazebo (needs the Phase 0 sim, which the launch file starts for you):
+
+```bash
+ros2 launch formation_gazebo formation.launch.py                        # GUI
+ros2 launch formation_gazebo formation.launch.py policy:=periodic k:=10
+./scripts/formation_smoke.sh                                            # headless check
+```
+
+`formation.launch.py` spawns the robots on the path in an empty arena, then
+starts the leader, comm-interface, controller and evaluation nodes. The
+evaluation node writes `episode.csv` and `metrics.csv` with the same columns
+and metric definitions as the fast twin, then exits.
+
+### The result Phase 1 exists to establish
+
+`formation_core.sweep --check` sweeps periodic(k), random(p) and
+event_triggered(delta) over the 8-seed evaluation suite and asserts the premise.
+It passes on both the evaluation and stress suites:
+
+* error rises as the communication rate falls, for every family;
+* **event-triggered beats periodic and random at every matched rate** -- by 82%
+  and 93% respectively at the low-rate end, converging as the rate approaches 1.
+
+That is what makes the task worth learning on: at a fixed message budget,
+*when* you transmit matters, so there is something for an RL/spiking scheduler
+to discover. The same ordering reproduces in Gazebo (event-triggered: 0.057 m
+with 5 messages; periodic k=20: 0.061 m with 20 messages).
+
+### The frozen contract
+
+`formation_core/contract.py` is the one file later phases must not break. The
+follower observes 10 normalized values in [-1, 1], all relative to itself and
+all derived from the ESTIMATE, and emits 2 normalized actions:
+
+| idx | name | meaning |
+|---|---|---|
+| 0, 1 | `dx`, `dy` | leader position in follower body frame / `max_range` |
+| 2, 3 | `sin_dtheta`, `cos_dtheta` | leader heading relative to follower |
+| 4, 5 | `ex`, `ey` | slot position in follower body frame / `max_range` |
+| 6, 7 | `v_self`, `w_self` | follower velocities / limits |
+| 8, 9 | `v_leader_est`, `w_leader_est` | estimated leader velocities / limits |
+| action 0, 1 | `v`, `w` | scaled to +-`v_max`, +-`w_max` |
+
+Angles appear only as (sin, cos), so there is no wraparound for a network to
+model; everything is relative, so a policy cannot memorise the path;
+`observation_space` / `action_space` are Box objects mirroring Gymnasium, and
+`reset()`/`step()` already return Gymnasium's tuples, so a Gym wrapper is a
+thin adapter. `CONTRACT_VERSION` is recorded in every result file.
+
+### Judgment calls (defaults, and why)
+
+| Choice | Default | Reasoning |
+|---|---|---|
+| Path | oval: 4 m straights + 1.5 m radius caps | Zero curvature next to constant curvature is the sharpest contrast in predictor difficulty. `figure8` is also available. |
+| Process noise | bounded AR(1), +-0.05 m/s, +-0.15 rad/s, rho 0.9 | Correlated, not white: white noise averages out and a CV predictor barely notices it. Bounded so the leader stays well behaved. |
+| Offset `d` | 0.8 m behind | Far enough that estimate error matters, close enough to stay in sensor range later. |
+| `dt`, duration | 0.05 s (20 Hz), 60 s | 20 Hz matches the Gazebo adapter; 60 s is about two laps. |
+| Normalization | `max_range` 3 m, `v_max` 1 m/s, `w_max` 2 rad/s | Tight ranges give population encoders better resolution; values saturate rather than escape [-1, 1]. |
+| Event threshold | position error only (`heading_weight` = 0) | Makes `delta` read directly as metres. Heading can be folded in via config. |
+| Sweep ranges | k in 1..100, p in 1..0.01, delta in 0..0.3 m | Chosen so all three families span the same 0.01-1.0 rate range, which is what makes matched-rate comparison possible. |
+| Aggregation | mean +- 95% CI, Student-t, 8 seeds | t(7) = 2.365, not 1.96; with 8 seeds the normal approximation understates the interval. |
+| Error sign convention | errors point from follower TO slot | `longitudinal` > 0 means lagging; `lateral` > 0 means the slot is to the follower's left. |
+
+Two things worth knowing when reading the numbers:
+
+* **Heading error is large by construction** (~0.4 rad RMS on the default oval)
+  and is not a controller fault: a robot holding a slot 0.8 m behind on a
+  1.5 m-radius curve is genuinely rotated relative to the leader. Judge
+  formation quality by the position errors.
+* **The leader's process noise enters differently in the two backends.** The
+  fast twin perturbs realised velocities; Gazebo can only be perturbed through
+  commands, which it then tracks through its own dynamics. Same effect on
+  predictability, not step-identical.
+
+### Layout
+
+```
+src/formation_core/                 pure Python, pip-installable, no ROS
+  formation_core/contract.py        FROZEN obs/action contract  <- start here
+  formation_core/env.py             FormationEnv + FastFormationEnv
+  formation_core/comm.py            comm interface + Channel hook (Phase 3)
+  formation_core/policies.py        always | periodic | random | event_triggered
+  formation_core/predictor.py       generic constant-velocity dead reckoning
+  formation_core/controllers.py     Controller interface, analytic follower, leader
+  formation_core/metrics.py         control + comm metrics, CSV, CI aggregation
+  formation_core/sweep.py           Pareto sweep + premise check
+  configs/                          default | eval_suite | stress_suite
+  tests/                            71 unit tests
+src/formation_gazebo/               ROS 2 nodes, importing formation_core
+  formation_gazebo/ros_interface.py odom <-> RobotState, world-frame transforms
+  formation_gazebo/*_node.py        leader | comm_interface | controller | evaluation
+  formation_gazebo/env.py           GazeboFormationEnv (same interface as the twin)
+  launch/formation.launch.py        sim + all four nodes
+```
+
 ## NEXT PHASES
 
-The workspace is laid out so new work lands as new packages next to
-`rover_multi_bringup`, with no restructuring:
+The workspace is laid out so new work lands as new packages beside the existing
+ones, with no restructuring. The interfaces they plug into already exist:
 
-- **Controller package**, for example `src/rover_controller/`. It subscribes to
-  `/<ns>/odom` (plus `/<ns>/scan` and `/<ns>/imu/data`) and publishes
-  `/<ns>/cmd_vel`. It replaces the teleop per robot. Start one instance per
-  robot namespace from a new launch file that includes
-  `multi_mini.launch.py`, or extend `config/robots.yaml` with a per-robot
-  controller entry.
-- **Communication-interface package**, for example `src/rover_comm_interface/`.
-  It sits between the controller and `/<ns>/cmd_vel`, or between the robots, to
-  model the network and transmission policy. A clean way to insert it is to
-  remap the controller's output to `/<ns>/cmd_vel_request` and have this node
-  forward to `/<ns>/cmd_vel`. Beyond one machine, set `ROS_LOCALHOST_ONLY=0`
-  and choose a `ROS_DOMAIN_ID` in `.env`.
-- Add their dependencies to each package's `package.xml`. The next
-  `docker compose build` resolves them through rosdep.
+* **RL controller** (Phase 2), e.g. `src/formation_rl/`. Implement
+  `formation_core.controllers.Controller` (`act(obs) -> action`) and register it
+  in the `CONTROLLERS` registry; train against `FastFormationEnv`, whose
+  `reset`/`step` already match Gymnasium. Nothing else changes: the same sweep
+  and Pareto plot compare it against the analytic baseline, and
+  `controller:=rl` runs it in Gazebo.
+* **Spiking controller** (PopSAN-style, SpiNNaker). Same `Controller` slot. The
+  contract was sized for it: 10 inputs and 2 outputs, all in [-1, 1], angles as
+  (sin, cos). Population encoders read the observation directly.
+* **Learned transmission policy.** Implement
+  `formation_core.policies.TransmissionPolicy`; `PolicyContext` already carries
+  what a scheduler needs (prediction error, age, timing). It then appears in the
+  Pareto plot next to the baselines.
+* **Network model** (Phase 3: delay, loss, jitter). Implement
+  `formation_core.comm.Channel` (`send`/`deliver`) and pass it to
+  `CommInterface`. Policies, controllers and metrics need no change --
+  `tests/test_comm_policies.py` already exercises the hook with a delaying
+  channel.
+* **Phase 0 additions** (the original note): a controller package and a
+  communication-interface package now exist as `formation_core` +
+  `formation_gazebo`; multi-machine runs need `ROS_LOCALHOST_ONLY=0` and a
+  shared `ROS_DOMAIN_ID` in `.env`.
+
+Add each package's dependencies to its `package.xml`; the next
+`docker compose build` resolves them through rosdep.

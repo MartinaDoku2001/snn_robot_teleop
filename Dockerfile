@@ -21,6 +21,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         mesa-utils \
         python3-colcon-common-extensions \
         python3-rosdep \
+        python3-pip \
     && rm -rf /var/lib/apt/lists/*
 
 # Resolve workspace dependencies with rosdep from package.xml files only, so

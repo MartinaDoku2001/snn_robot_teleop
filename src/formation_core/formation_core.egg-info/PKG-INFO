@@ -1,0 +1,14 @@
+Metadata-Version: 2.1
+Name: formation-core
+Version: 0.1.0
+Summary: Task definition and evaluation harness for networked leader-follower control.
+Home-page: UNKNOWN
+Maintainer: Martina Doku
+Maintainer-email: martina.doku.t7@dc.tohoku.ac.jp
+License: Apache-2.0
+Platform: UNKNOWN
+Provides-Extra: plots
+Provides-Extra: test
+
+UNKNOWN
+

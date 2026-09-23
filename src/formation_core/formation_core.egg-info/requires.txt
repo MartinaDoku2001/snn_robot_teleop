@@ -1,0 +1,9 @@
+numpy
+pyyaml
+setuptools
+
+[plots]
+matplotlib
+
+[test]
+pytest
