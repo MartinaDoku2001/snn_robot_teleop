@@ -1,0 +1,6 @@
+# setup.py is the source of truth for metadata (it is also what colcon's
+# ament_python build uses). This file only declares the build backend so
+# `pip install -e src/formation_core` works outside ROS.
+[build-system]
+requires = ["setuptools>=45", "wheel"]
+build-backend = "setuptools.build_meta"
