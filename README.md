@@ -37,9 +37,27 @@ In two more terminals, start one teleop session per robot:
 ./scripts/teleop.sh robot2      # or ./scripts/teleop_robot2.sh
 ```
 
-Each teleop is a `teleop_twist_keyboard` publishing to `/<robot>/cmd_vel`. The
-terminal must have keyboard focus: `i` drives forward, `,` backward, `j`/`l`
-turn, `k` stops, and `q`/`z` change speed.
+Each teleop is a `teleop_twist_keyboard` publishing to `/<robot>/cmd_vel`.
+**The teleop terminal itself must have keyboard focus** -- clicking the Gazebo
+or RViz window sends your keys there instead, and the robot will not move.
+**Arrow keys do nothing.** The keys are:
+
+| key | action |
+|---|---|
+| `i` / `,` | forward / backward |
+| `j` / `l` | turn left / right |
+| `u` `o` `m` `.` | diagonal (forward-left, forward-right, back-left, back-right) |
+| `k` | stop |
+| `q` / `z` | faster / slower (all), `w`/`x` linear only, `e`/`c` turn only |
+| `Ctrl-C` | quit |
+
+One press is enough: the command keeps applying until you press another key,
+so `i` drives until you press `k`. If you prefer not to use the keyboard:
+
+```bash
+./scripts/drive.sh robot1              # forward 0.5 m/s for 3 s, prints odom
+./scripts/drive.sh robot2 0.4 0.5 5    # linear.x angular.z seconds
+```
 
 `./scripts/up.sh` does the xhost step and `docker compose up -d` together. It
 also picks the GPU mode automatically; see below.
@@ -125,7 +143,7 @@ To check what the container actually renders with:
 ```
 Dockerfile, docker-compose.yml          image + base (Intel/AMD) runtime config
 docker-compose.nvidia.yml / .software.yml   GPU overrides
-scripts/                                xhost, up, build, sim, teleop, smoke_test, entrypoint
+scripts/                                xhost, up, build, sim, teleop, drive, watch_cmd_vel, smoke_test, entrypoint
 src/roverrobotics_ros2/                 vendor repo, humble @ e6104d0, UNMODIFIED (git subtree)
 src/rover_multi_bringup/                our package
   rover_multi_bringup/description.py    namespaces the vendor URDF per robot
@@ -193,6 +211,15 @@ libraries, so the image needs no NVIDIA driver.
 - Close RViz, or run headless with `gui:=false`.
 - A faster GPU won't help much here: the bottleneck is CPU physics. In software mode RViz itself becomes sluggish.
 - The teleop still works; the robots just move in sim-time.
+
+**I press keys in teleop but the robot doesn't move.**
+Work through this in order:
+1. Check the sim itself: `./scripts/drive.sh robot1`. If the robot moves in Gazebo, the simulator and the whole command path are fine, and the problem is the keystrokes.
+2. Click the **teleop terminal** so it has focus. Keys typed into the Gazebo or RViz window never reach teleop.
+3. Use `i`, `j`, `k`, `l`, `,` -- **not the arrow keys**. Any unbound key sends a stop command, so arrow keys hold the robot still.
+4. Watch what teleop actually sends: run `./scripts/watch_cmd_vel.sh robot1` in a third terminal, then press `i` in the teleop terminal. Nothing printed means keystrokes aren't arriving (focus or key problem). Printed `0.5` while the robot stays put means look at the sim instead.
+5. Movement is genuinely slow: the sim runs at roughly 0.3x real time, so 0.5 m/s looks like about 0.15 m/s on screen. Give it a few seconds, or speed up with `q`.
+6. Teleop must run in a real terminal. Starting it from an editor's "run" button or a pipe gives it no TTY, and it cannot read keys.
 
 **`ros2 topic list` on the host doesn't show the robots.**
 The container uses `ROS_LOCALHOST_ONLY=1` and `ROS_DOMAIN_ID=0`. Match both on
