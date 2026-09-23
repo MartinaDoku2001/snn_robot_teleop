@@ -7,6 +7,11 @@ formation_core's :class:`EpisodeRecorder`. The CSV columns, the metric
 definitions and the summary are therefore identical to the fast-twin ones,
 which is what makes sim-to-sim comparison meaningful.
 
+The recorded ``policy`` and ``controller`` are the ones the comm interface and
+controller nodes announce on ``/formation/policy`` and ``/formation/controller``
+-- the effective components, after launch-argument overrides -- not this node's
+copy of the YAML.
+
 Writes ``<out>/episode.csv``, ``<out>/metrics.csv`` and ``<out>/config.yaml``,
 then shuts the episode down.
 """
@@ -26,7 +31,12 @@ from formation_core.contract import formation_errors
 from formation_core.metrics import EpisodeRecorder, write_rows_csv
 from formation_core.paths import make_path
 
-from .ros_interface import RobotBridge, odometry_to_state, wait_for_bridges
+from .ros_interface import (
+    RobotBridge,
+    odometry_to_state,
+    subscribe_announced,
+    wait_for_bridges,
+)
 
 
 class EvaluationNode(Node):
@@ -63,6 +73,12 @@ class EvaluationNode(Node):
         self.follower = RobotBridge(
             self, self.get_parameter('follower_namespace').value, publish_commands=False)
         self.estimate = None
+        # The policy and controller actually in use, as announced by the nodes
+        # that built them. The launch file's policy:= / controller:= overrides
+        # never reach THIS node's config, so reading them from the YAML would
+        # report the default no matter what the episode really ran.
+        self.announced_policy = None
+        self.announced_controller = None
         self.transmitted = False
         self.prediction_error = float('nan')
         self.action = (float('nan'), float('nan'))
@@ -74,6 +90,8 @@ class EvaluationNode(Node):
             Float64, '/formation/prediction_error', self._on_prediction_error, 10)
         self.create_subscription(
             Float32MultiArray, '/formation/action', self._on_action, 10)
+        subscribe_announced(self, '/formation/policy', self._on_policy)
+        subscribe_announced(self, '/formation/controller', self._on_controller)
 
         if not wait_for_bridges(self, [self.leader, self.follower], timeout=60.0):
             self.get_logger().error('missing odometry; is the sim running?')
@@ -98,6 +116,12 @@ class EvaluationNode(Node):
 
     def _on_prediction_error(self, msg):
         self.prediction_error = float(msg.data)
+
+    def _on_policy(self, component):
+        self.announced_policy = component
+
+    def _on_controller(self, component):
+        self.announced_controller = component
 
     def _on_action(self, msg):
         if len(msg.data) >= 2:
@@ -144,6 +168,20 @@ class EvaluationNode(Node):
         if self.step_index >= self.config.steps:
             self.finish()
 
+    def effective_config(self):
+        """This node's config with the ANNOUNCED policy and controller in it.
+
+        Falls back to the YAML for anything not announced, so a run with no
+        overrides -- or with a node that did not come up -- still records
+        something truthful.
+        """
+        overrides = {}
+        if self.announced_policy is not None:
+            overrides['policy'] = self.announced_policy
+        if self.announced_controller is not None:
+            overrides['controller'] = self.announced_controller
+        return self.config.with_overrides(**overrides) if overrides else self.config
+
     def finish(self):
         if self.finished:
             return
@@ -152,10 +190,11 @@ class EvaluationNode(Node):
         csv_path = self.recorder.write_csv(os.path.join(self.out_dir, 'episode.csv'))
         metrics = self.recorder.metrics()
         metrics['label'] = self.get_parameter('label').value
-        metrics['policy'] = self.config.policy.describe()
-        metrics['controller'] = self.config.controller.describe()
+        effective = self.effective_config()
+        metrics['policy'] = effective.policy.describe()
+        metrics['controller'] = effective.controller.describe()
         write_rows_csv(os.path.join(self.out_dir, 'metrics.csv'), [metrics])
-        self.config.to_yaml(os.path.join(self.out_dir, 'config.yaml'))
+        effective.to_yaml(os.path.join(self.out_dir, 'config.yaml'))
 
         self.get_logger().info(
             'EPISODE COMPLETE  '

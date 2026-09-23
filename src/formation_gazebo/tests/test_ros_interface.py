@@ -17,7 +17,9 @@ from nav_msgs.msg import Odometry  # noqa: E402
 
 from formation_core.geometry import RobotState  # noqa: E402
 from formation_gazebo.ros_interface import (  # noqa: E402
+    announce,
     odometry_to_state,
+    parse_announcement,
     quaternion_from_yaw,
     state_to_odometry,
     yaw_from_quaternion,
@@ -113,3 +115,80 @@ def test_gazebo_env_implements_the_shared_interface():
     assert issubclass(GazeboFormationEnv, FormationEnv)
     for method in ('reset', 'step', 'close'):
         assert callable(getattr(GazeboFormationEnv, method))
+
+
+# --------------------------------------------------------------- announcements
+# The evaluation node reports the policy and controller it is TOLD about, not
+# the ones in its own YAML, because launch-argument overrides never reach it.
+# These tests pin the payload both sides agree on.
+
+
+class _RecordingNode:
+    """Just enough Node to capture what :func:`announce` would publish."""
+
+    def __init__(self):
+        self.published = []
+
+    def create_publisher(self, msg_type, topic, qos):
+        node = self
+
+        class _Pub:
+            def publish(self, msg):
+                node.published.append((topic, msg))
+
+        return _Pub()
+
+
+def _announced(component):
+    node = _RecordingNode()
+    announce(node, '/formation/announced', component)
+    (_, msg), = node.published
+    return parse_announcement(msg)
+
+
+@pytest.mark.parametrize('name,params', [
+    ('always', {}),
+    ('periodic', {'k': 10}),
+    ('random', {'p': 0.1}),
+    ('event_triggered', {'delta': 0.05}),
+    ('analytic', {}),
+])
+def test_an_announcement_round_trips(name, params):
+    from formation_core.config import ComponentConfig
+    component = ComponentConfig(name, params)
+    assert _announced(component).describe() == component.describe()
+    assert _announced(component).params == params
+
+
+@pytest.mark.parametrize('name,params', [
+    ('always', {}),
+    ('periodic', {'k': 10}),
+    ('random', {'p': 0.1}),
+    ('event_triggered', {'delta': 0.05}),
+])
+def test_an_announced_policy_matches_what_the_fast_twin_writes(name, params):
+    """Both backends record the BUILT policy, so the strings are comparable."""
+    from formation_core.policies import make_policy
+    policy = make_policy(name, **params)
+    assert _announced(policy).describe() == policy.describe()
+
+
+def test_a_defaulted_parameter_is_still_announced():
+    """The reason the policy is announced built, not as requested."""
+    from formation_core.config import ComponentConfig
+    from formation_core.policies import make_policy
+    requested = ComponentConfig('random', {})       # no p given anywhere
+    assert requested.describe() == 'random'         # the old, lossy string
+    assert _announced(make_policy('random')).describe() == 'random(p=0.5)'
+
+
+def test_an_announced_component_can_replace_the_one_in_a_config():
+    """What the evaluation node does before writing metrics.csv/config.yaml."""
+    from formation_core.config import EpisodeConfig
+    from formation_core.policies import make_policy
+    config = EpisodeConfig()                       # policy: always
+    assert config.policy.describe() == 'always'
+    effective = config.with_overrides(
+        policy=_announced(make_policy('periodic', k=10)))
+    assert effective.policy.describe() == 'periodic(k=10)'
+    assert EpisodeConfig.from_dict(effective.to_dict()).policy.describe() == 'periodic(k=10)'

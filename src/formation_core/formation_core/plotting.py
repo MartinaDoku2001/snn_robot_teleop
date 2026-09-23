@@ -45,7 +45,13 @@ POLICY_STYLE = {
 }
 
 
-def _style_axes(ax, xlabel, ylabel, title=None):
+def _style_axes(ax, xlabel, ylabel, title=None, scale=1.0):
+    """Apply the shared chart styling.
+
+    ``scale`` multiplies every type size: 1.0 for a figure read on paper,
+    ~1.4 for one projected in a talk, where the same 9 pt tick label is
+    illegible from the back of a room.
+    """
     ax.set_facecolor(SURFACE)
     ax.figure.set_facecolor(SURFACE)
     ax.grid(True, color=GRID, linewidth=0.6, alpha=0.9)
@@ -54,11 +60,11 @@ def _style_axes(ax, xlabel, ylabel, title=None):
         ax.spines[side].set_visible(False)
     for side in ('left', 'bottom'):
         ax.spines[side].set_color(GRID)
-    ax.tick_params(colors=INK_SECONDARY, labelsize=9)
-    ax.set_xlabel(xlabel, color=INK_SECONDARY, fontsize=10)
-    ax.set_ylabel(ylabel, color=INK_SECONDARY, fontsize=10)
+    ax.tick_params(colors=INK_SECONDARY, labelsize=9 * scale)
+    ax.set_xlabel(xlabel, color=INK_SECONDARY, fontsize=10 * scale)
+    ax.set_ylabel(ylabel, color=INK_SECONDARY, fontsize=10 * scale)
     if title:
-        ax.set_title(title, color=INK, fontsize=11, loc='left', pad=10)
+        ax.set_title(title, color=INK, fontsize=11 * scale, loc='left', pad=10)
 
 
 def _style_for(label):
@@ -147,7 +153,7 @@ def plot_trajectory(result, path, reference_path=None):
 def plot_pareto(series, path, error_key='formation_rms',
                 title='Formation error vs communication rate',
                 ylabel='formation RMS error (m)', annotate_params=True,
-                log_y=True):
+                log_y=True, scale=1.0, family_labels=None, figsize=(8, 5.5)):
     """THE key artifact: error against communication rate, per policy family.
 
     Args:
@@ -157,11 +163,15 @@ def plot_pareto(series, path, error_key='formation_rms',
         path: output file.
         error_key: only used for the default axis label.
         annotate_params: label the swept parameter next to each point.
+        scale: type-size multiplier (see :func:`_style_axes`); >1 for a talk.
+        family_labels: optional ``family -> display name`` mapping, so a slide
+            can read 'event-triggered' where the code says 'event_triggered'.
 
     Down-and-left is better: less communication AND less error.
     """
     del error_key
-    fig, ax = plt.subplots(figsize=(8, 5.5))
+    family_labels = family_labels or {}
+    fig, ax = plt.subplots(figsize=figsize)
 
     for family, points in series.items():
         if not points:
@@ -173,17 +183,22 @@ def plot_pareto(series, path, error_key='formation_rms',
         rate_ci = np.array([p.get('rate_ci', 0.0) for p in points], dtype=float)
         error_ci = np.array([p.get('error_ci', 0.0) for p in points], dtype=float)
 
+        display = family_labels.get(family, family)
         ax.errorbar(
             rates, errors, yerr=error_ci, xerr=rate_ci,
-            color=color, marker=marker, markersize=7, linewidth=1.8,
-            elinewidth=1.0, capsize=2.5, label=family, zorder=3,
+            color=color, marker=marker, markersize=7 * scale, linewidth=1.8 * scale,
+            elinewidth=1.0, capsize=2.5, label=display, zorder=3,
             markeredgecolor=SURFACE, markeredgewidth=0.8)
 
         # Direct label at the LOW-rate end, where the families are far apart.
         # At high rates they converge, so a label there would collide.
+        # Down-and-LEFT of the point: up-and-right runs into the next family's
+        # error bars, since the curves are stacked in that direction.
         ax.annotate(
-            family, xy=(rates[0], errors[0]), xytext=(8, 6),
-            textcoords='offset points', color=color, fontsize=9, fontweight='bold')
+            display, xy=(rates[0], errors[0]),
+            xytext=(-10 * scale, -20 * scale), ha='right',
+            textcoords='offset points', color=color, fontsize=9 * scale,
+            fontweight='bold')
 
         if annotate_params:
             # One selective label per series: the low-rate extreme. The
@@ -191,10 +206,12 @@ def plot_pareto(series, path, error_key='formation_rms',
             # 1.0, so labelling them there only produces collisions.
             for point in (points[0],):
                 if point.get('label'):
+                    # To the RIGHT: straight down is where the family label
+                    # now lives, and straight up is the error bar.
                     ax.annotate(
                         point['label'], xy=(point['rate'], point['error']),
-                        xytext=(0, -13), textcoords='offset points',
-                        color=INK_SECONDARY, fontsize=7.5, ha='center')
+                        xytext=(10 * scale, -4 * scale), textcoords='offset points',
+                        color=INK_SECONDARY, fontsize=7.5 * scale, ha='left')
 
     ax.set_xscale('log')
     if log_y:
@@ -202,11 +219,12 @@ def plot_pareto(series, path, error_key='formation_rms',
         # configuration flattens everything that matters.
         ax.set_yscale('log')
     _style_axes(ax, 'communication rate (messages per control step, log scale)',
-                ylabel + (', log scale' if log_y else ''), title)
+                ylabel + (', log scale' if log_y else ''), title, scale=scale)
     ax.annotate(
         'better  \u2199', xy=(0.015, 0.05), xycoords='axes fraction',
-        color=INK_SECONDARY, fontsize=9, style='italic')
-    ax.legend(frameon=False, fontsize=9, labelcolor=INK_SECONDARY, loc='upper right')
+        color=INK_SECONDARY, fontsize=9 * scale, style='italic')
+    ax.legend(frameon=False, fontsize=9 * scale, labelcolor=INK_SECONDARY,
+              loc='upper right')
     fig.tight_layout()
     fig.savefig(path, dpi=150, facecolor=SURFACE)
     plt.close(fig)

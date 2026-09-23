@@ -15,6 +15,7 @@ Verified Phase 0 interfaces (re-checked against the running sim):
 
 from __future__ import annotations
 
+import json
 import math
 import time
 
@@ -23,11 +24,54 @@ import rclpy
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
 from rclpy.duration import Duration
+from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile
+from std_msgs.msg import String
 from tf2_ros import Buffer, TransformListener
 
+from formation_core.config import ComponentConfig
 from formation_core.geometry import RobotState, wrap_angle
 
 WORLD_FRAME = 'world'
+
+#: Latched, depth-1 QoS for the "what am I actually running" announcements.
+#: Transient-local so a subscriber that joins late -- the evaluation node can
+#: start after the comm interface -- still receives the value.
+ANNOUNCE_QOS = QoSProfile(
+    depth=1,
+    history=HistoryPolicy.KEEP_LAST,
+    durability=DurabilityPolicy.TRANSIENT_LOCAL)
+
+
+def announce(node, topic, component):
+    """Latch ``component``'s (name, params) on ``topic``; return the publisher.
+
+    The node that BUILDS a component is the only one that knows which one it
+    ended up with, once launch-argument overrides are applied. It says so here
+    instead of letting every other node re-derive it from the YAML and get it
+    wrong. Name and params travel together, so a listener can both name the
+    component and reconstruct its config.
+    """
+    payload = json.dumps(
+        {'name': str(component.name), 'params': dict(component.params)})
+    pub = node.create_publisher(String, topic, ANNOUNCE_QOS)
+    pub.publish(String(data=payload))
+    return pub
+
+
+def subscribe_announced(node, topic, callback):
+    """Subscribe to a latched announcement published by :func:`announce`.
+
+    ``callback`` receives a :class:`~formation_core.config.ComponentConfig`.
+    """
+    def _decode(msg):
+        callback(parse_announcement(msg))
+
+    return node.create_subscription(String, topic, _decode, ANNOUNCE_QOS)
+
+
+def parse_announcement(msg):
+    """The :class:`ComponentConfig` carried by an :func:`announce` payload."""
+    return ComponentConfig.parse(json.loads(msg.data))
 
 
 def yaw_from_quaternion(q):

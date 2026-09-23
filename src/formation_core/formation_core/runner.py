@@ -57,7 +57,11 @@ def run_episode(config, env=None, controller=None, recorder=None, label=''):
 
     metrics = recorder.metrics(comm_stats=getattr(env, 'comm_stats', None))
     metrics['terminated_early'] = int(terminated)
-    metrics['policy'] = config.policy.describe()
+    # The BUILT policy, so a parameter left to its default is still recorded.
+    # config.policy.describe() would write a bare 'random' for RandomTransmit(p=0.5).
+    policy = getattr(env, 'policy', None)
+    metrics['policy'] = (
+        policy.describe() if policy is not None else config.policy.describe())
     metrics['controller'] = config.controller.describe()
     metrics['predictor'] = config.predictor.describe()
     metrics['path'] = config.path.name
@@ -67,7 +71,7 @@ def run_episode(config, env=None, controller=None, recorder=None, label=''):
         recorder=recorder,
         terminated=terminated,
         truncated=truncated,
-        label=label or config.policy.describe(),
+        label=label or metrics['policy'],
     )
 
 

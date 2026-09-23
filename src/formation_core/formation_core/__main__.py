@@ -9,6 +9,7 @@ nothing installed at all.
     python3 -m formation_core run    --policy event_triggered --delta 0.05 --plot
     python3 -m formation_core suite  --suite configs/eval_suite.yaml
     python3 -m formation_core sweep  --check
+    python3 -m formation_core figures --out results/figures
 """
 
 import sys
@@ -19,6 +20,7 @@ commands:
   run      run a single episode (CSV, optional figures)
   suite    run a seeded suite and report mean +- 95% CI
   sweep    Pareto sweep over transmission policies, with the premise check
+  figures  presentation figures (slide-sized, from the same data)
 
 Add --help after a command for its options.
 """
@@ -40,6 +42,9 @@ def main(argv=None):
     if command == 'sweep':
         from .sweep import main as sweep_main
         return sweep_main(rest)
+    if command == 'figures':
+        from .figures import main as figures_main
+        return figures_main(rest)
 
     print(f'unknown command {command!r}\n\n{USAGE}', file=sys.stderr)
     return 2

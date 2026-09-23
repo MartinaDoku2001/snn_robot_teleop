@@ -109,3 +109,66 @@ def test_figures_are_written():
             plot_pareto(series, os.path.join(tmp, 'pareto.png')),
         ):
             assert os.path.getsize(path) > 5000  # a real figure, not an empty canvas
+
+
+# ------------------------------------------------------------ presentation
+
+def test_pareto_scales_and_relabels_for_a_talk():
+    """The talk figure must be the SAME plot, only bigger and better named."""
+    pytest.importorskip('matplotlib')
+    from formation_core.plotting import plot_pareto
+
+    series = {'event_triggered': _points('event_triggered', [0.1, 1.0], [0.08, 0.05])}
+    with tempfile.TemporaryDirectory() as tmp:
+        paper = plot_pareto(series, os.path.join(tmp, 'paper.png'))
+        talk = plot_pareto(
+            series, os.path.join(tmp, 'talk.png'), scale=1.4,
+            family_labels={'event_triggered': 'event-triggered'},
+            figsize=(11, 6.2))
+        # Same data, larger canvas: the talk file is the heavier render.
+        assert os.path.getsize(talk) > os.path.getsize(paper)
+
+
+def test_presentation_figures_are_written():
+    pytest.importorskip('matplotlib')
+    from formation_core import figures
+
+    # A deliberately tiny suite: these figures run their own episodes, and the
+    # test is checking that they are produced, not what the numbers are.
+    suite = SuiteConfig(name='tiny', seeds=[0, 1], episode=EpisodeConfig(duration=4.0))
+    with tempfile.TemporaryDirectory() as tmp:
+        written = [
+            figures.figure_matched_budget(suite, tmp, progress=lambda *_: None),
+            figures.figure_mechanism(suite.episode, tmp),
+            figures.figure_trajectories(suite.episode, tmp),
+        ]
+        for path in written:
+            assert os.path.getsize(path) > 5000     # a real figure, not a blank canvas
+            assert os.path.exists(path.replace('.png', '.pdf'))  # print version too
+
+
+def test_sim_to_sim_uses_each_gazebo_run_s_own_config(tmp_path):
+    """The twin must re-run the config that Gazebo actually ran.
+
+    The run directory is the only record of it -- the launch file's policy
+    override never reaches the packaged YAML -- so reading the config from
+    anywhere else silently compares two different episodes.
+    """
+    pytest.importorskip('matplotlib')
+    from formation_core import figures
+
+    run_dir = tmp_path / 'periodic_k4'
+    run_dir.mkdir()
+    EpisodeConfig(duration=4.0, policy={'name': 'periodic', 'k': 4}).to_yaml(
+        str(run_dir / 'config.yaml'))
+    (run_dir / 'metrics.csv').write_text(
+        'formation_rms,comm_rate,messages\n0.0731,0.25,20\n')
+
+    rows = figures._gazebo_rows(str(tmp_path))
+    assert len(rows) == 1
+    assert rows[0]['config'].policy.describe() == 'periodic(k=4)'
+    assert rows[0]['config'].duration == 4.0
+
+    path = figures.figure_sim_to_sim(
+        str(tmp_path), None, str(tmp_path), progress=lambda *_: None)
+    assert os.path.getsize(path) > 5000

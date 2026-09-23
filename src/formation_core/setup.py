@@ -24,6 +24,7 @@ setup(
             'formation-run = formation_core.cli:main_run',
             'formation-suite = formation_core.cli:main_suite',
             'formation-sweep = formation_core.sweep:main',
+            'formation-figures = formation_core.figures:main',
         ],
     },
 )

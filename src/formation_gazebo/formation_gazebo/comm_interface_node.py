@@ -13,6 +13,7 @@ Published:
     /formation/transmitted       std_msgs/Bool      (was a message sent this step)
     /formation/age               std_msgs/Int32     (steps since last refresh)
     /formation/prediction_error  std_msgs/Float64   (error a message would erase)
+    /formation/policy            std_msgs/String    (latched: the EFFECTIVE policy)
 """
 
 from __future__ import annotations
@@ -29,7 +30,7 @@ from formation_core.config import ComponentConfig, EpisodeConfig
 from formation_core.policies import make_policy
 from formation_core.predictor import make_predictor
 
-from .ros_interface import RobotBridge, state_to_odometry, wait_for_bridges
+from .ros_interface import RobotBridge, announce, state_to_odometry, wait_for_bridges
 
 
 class CommInterfaceNode(Node):
@@ -63,6 +64,11 @@ class CommInterfaceNode(Node):
         self.transmitted_pub = self.create_publisher(Bool, '/formation/transmitted', 10)
         self.age_pub = self.create_publisher(Int32, '/formation/age', 10)
         self.error_pub = self.create_publisher(Float64, '/formation/prediction_error', 10)
+        # Say which policy the overrides actually produced, so the evaluation
+        # node records THAT rather than re-reading the un-overridden YAML.
+        # The built policy, not policy_cfg: its params are the operative
+        # k/p/delta, so a value that came from a default is recorded too.
+        self.policy_pub = announce(self, '/formation/policy', policy)
 
         if not wait_for_bridges(self, [self.bridge], timeout=60.0):
             self.get_logger().error('no leader odometry; is the sim running?')

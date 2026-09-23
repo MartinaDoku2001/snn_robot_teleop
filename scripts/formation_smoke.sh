@@ -3,10 +3,11 @@
 # the nodes, topics and CSV appear.
 #   ./scripts/formation_smoke.sh                       # event_triggered, 20 s
 #   DURATION=30 POLICY=periodic K=5 ./scripts/formation_smoke.sh
+#   POLICY=random P=0.1 ./scripts/formation_smoke.sh
 set -e
 if [ ! -f /.dockerenv ]; then
     cd "$(dirname "$0")/.."
-    exec docker compose exec -T -e DURATION -e POLICY -e K -e DELTA -e OUT \
+    exec docker compose exec -T -e DURATION -e POLICY -e K -e P -e DELTA -e OUT \
         sim /ws/scripts/formation_smoke.sh "$@"
 fi
 source /opt/ros/humble/setup.bash
@@ -16,6 +17,7 @@ DURATION="${DURATION:-20}"
 POLICY="${POLICY:-event_triggered}"
 DELTA="${DELTA:-0.05}"
 K="${K:-0}"
+P="${P:--1}"
 OUT="${OUT:-/ws/results/gazebo_smoke}"
 LOG=/ws/log/formation_smoke.log
 
@@ -40,7 +42,7 @@ rm -rf "$OUT"
 echo "[smoke] launching: policy=$POLICY delta=$DELTA k=$K duration=${DURATION}s"
 setsid ros2 launch formation_gazebo formation.launch.py \
     gui:=false rviz:=false duration:="$DURATION" \
-    policy:="$POLICY" delta:="$DELTA" k:="$K" out:="$OUT" >"$LOG" 2>&1 &
+    policy:="$POLICY" delta:="$DELTA" k:="$K" p:="$P" out:="$OUT" >"$LOG" 2>&1 &
 
 # Gazebo runs below real time, so allow generous wall-clock headroom.
 deadline=$(( $(date +%s) + $(printf '%.0f' "$DURATION") * 12 + 120 ))
@@ -63,6 +65,14 @@ check 'unique world->odom transforms (no stale simulation)' \
 check 'episode completed' "$(grep -c 'EPISODE COMPLETE' "$LOG")"
 check 'episode.csv written' "$(ls "$OUT"/episode.csv 2>/dev/null | wc -l)"
 check 'metrics.csv written' "$(ls "$OUT"/metrics.csv 2>/dev/null | wc -l)"
+# The recorded policy must be the one that RAN, not the one in the YAML.
+check "metrics.csv reports policy=$POLICY" \
+      "$(python3 -c "
+import csv
+with open('$OUT/metrics.csv') as f:
+    row = next(csv.DictReader(f))
+print(int(row['policy'].split('(')[0] == '$POLICY'))
+" 2>/dev/null || echo 0)"
 
 grep 'EPISODE COMPLETE' "$LOG" | sed 's/.*EPISODE COMPLETE/  /' || true
 [ $status -eq 0 ] && echo '[smoke] PASSED' || echo "[smoke] FAILED (see $LOG)"

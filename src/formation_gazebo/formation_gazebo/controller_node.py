@@ -12,7 +12,8 @@ contract.
 
 Subscribed:  /<follower>/odom, /formation/leader_estimate
 Published:   /<follower>/cmd_vel, /formation/observation (Float32MultiArray),
-             /formation/action (Float32MultiArray)
+             /formation/action (Float32MultiArray),
+             /formation/controller (std_msgs/String, latched: the EFFECTIVE controller)
 """
 
 from __future__ import annotations
@@ -23,11 +24,11 @@ from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from std_msgs.msg import Float32MultiArray
 
-from formation_core.config import EpisodeConfig
+from formation_core.config import ComponentConfig, EpisodeConfig
 from formation_core.contract import build_observation, scale_action
 from formation_core.controllers import make_controller
 
-from .ros_interface import RobotBridge, odometry_to_state, wait_for_bridges
+from .ros_interface import RobotBridge, announce, odometry_to_state, wait_for_bridges
 
 
 class ControllerNode(Node):
@@ -46,6 +47,10 @@ class ControllerNode(Node):
             EpisodeConfig.from_yaml(config_path) if config_path else EpisodeConfig())
         name = self.get_parameter('controller').value or self.config.controller.name
         params = self.config.controller.params if name == self.config.controller.name else {}
+        # The REQUESTED component, as the fast twin records it: the constructed
+        # controller would also carry its default gains, and the two backends'
+        # CSVs have to stay comparable string-for-string.
+        self.controller_cfg = ComponentConfig(name, params)
         self.controller = make_controller(name, config=self.config.contract, **params)
         self.controller.reset()
 
@@ -58,6 +63,10 @@ class ControllerNode(Node):
             Float32MultiArray, '/formation/observation', 10)
         self.action_pub = self.create_publisher(
             Float32MultiArray, '/formation/action', 10)
+        # Same reason as the comm interface's policy announcement: the
+        # controller:= override lives here, so the effective name is published
+        # here too.
+        self.controller_pub = announce(self, '/formation/controller', self.controller_cfg)
 
         if not wait_for_bridges(self, [self.bridge], timeout=60.0):
             self.get_logger().error('no follower odometry; is the sim running?')

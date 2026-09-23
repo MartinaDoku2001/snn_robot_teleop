@@ -208,3 +208,8 @@ class FastFormationEnv(FormationEnv):
     @property
     def comm_stats(self):
         return self.comm.stats if self.comm is not None else None
+
+    @property
+    def policy(self):
+        """The transmission policy in use, with its operative parameters."""
+        return self.comm.policy if self.comm is not None else None

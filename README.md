@@ -329,9 +329,40 @@ python3 -m formation_core suite --suite configs/stress_suite.yaml --policy perio
 # THE key artifact: the Pareto sweep over all three families, with the check
 python3 -m formation_core sweep --check --out results/sweep
 
-# unit tests (71)
+# unit tests (74)
 python3 -m pytest tests -q
 ```
+
+### Figures for a talk
+
+`formation_core figures` writes the five slide-sized figures that carry the
+result, as PNG (slides) and PDF (print), from the same data and the same
+palette as the paper figures:
+
+```bash
+python3 -m formation_core sweep --out results/sweep          # figure 2 needs this
+python3 -m formation_core figures --out results/figures \
+    --sweep results/sweep \
+    --gazebo-results results/gz_policies \
+    --gazebo-config src/formation_gazebo/config/gazebo_episode.yaml
+```
+
+| | Figure | The one question it answers |
+|---|---|---|
+| 1 | `01_matched_budget` | At a fixed message budget, how much better is event-triggering? |
+| 2 | `02_pareto` | Does that hold across the whole budget range? |
+| 3 | `03_mechanism` | *Why* does it win -- where does each policy spend its messages? |
+| 4 | `04_trajectories` | What does the failure look like on the ground? |
+| 5 | `05_sim_to_sim` | Does the fast twin's answer survive a real simulator? |
+
+`--only budget pareto mechanism trajectories transfer` regenerates a subset.
+Figures 1, 3 and 4 run their own episodes; figure 2 reads `pareto.json` from the
+sweep, and figure 5 reads Gazebo run directories, taking each run's **own**
+saved `config.yaml` so the twin re-runs the identical episode.
+
+Figure 4 colours the follower's track by formation error rather than drawing
+leader and follower tracks: most of the error is along-track, so a 0.05 m and a
+0.30 m episode trace nearly the same oval and plain tracks show nothing.
 
 `python3 -m formation_core <command>` works everywhere. The same entry points
 are installed as console scripts, reachable as
