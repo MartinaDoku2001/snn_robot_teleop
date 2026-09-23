@@ -1,0 +1,13 @@
+# Spawn poses for the formation task: the leader starts ON the reference path
+# at its start pose (the oval's start point, heading +x) and the follower
+# starts exactly in its slot, 0.8 m behind. Consumed by
+# rover_multi_bringup/multi_mini.launch.py via its robots_file argument.
+robots:
+  - name: robot1
+    x: -2.0      # oval start point: (-straight_length/2, -radius)
+    y: -1.5
+    yaw: 0.0
+  - name: robot2
+    x: -2.8      # offset_d = 0.8 m directly behind the leader
+    y: -1.5
+    yaw: 0.0

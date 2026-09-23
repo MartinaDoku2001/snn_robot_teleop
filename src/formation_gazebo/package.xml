@@ -1,0 +1,28 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>formation_gazebo</name>
+  <version>0.1.0</version>
+  <description>
+    Gazebo backend for the formation task: ROS 2 nodes that implement the same
+    observation/action contract, transmission policies and metrics as
+    formation_core, wired to the Phase 0 /robot1 and /robot2 topics.
+  </description>
+  <maintainer email="martina.doku.t7@dc.tohoku.ac.jp">Martina Doku</maintainer>
+  <license>Apache-2.0</license>
+
+  <exec_depend>formation_core</exec_depend>
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>nav_msgs</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>tf2_ros</exec_depend>
+  <exec_depend>rover_multi_bringup</exec_depend>
+  <exec_depend>ros_gz_sim</exec_depend>
+
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

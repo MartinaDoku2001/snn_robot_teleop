@@ -1,0 +1,55 @@
+# Episode config for the GAZEBO backend.
+#
+# Same task and same contract as the fast twin, with two settings adjusted for
+# a real simulator: a slower leader (the Rover Mini's diff-drive tracks a
+# 0.45 m/s reference comfortably, and Gazebo runs below real time) and a
+# shorter episode, so a smoke test finishes in reasonable wall-clock time.
+seed: 0
+dt: 0.05              # 20 Hz control, matches the Gazebo adapter's rate
+duration: 40.0        # seconds of SIM time -> 800 steps
+offset_d: 0.8         # follower holds 0.8 m directly behind the leader
+
+path:
+  name: oval          # straights (zero curvature) + semicircular caps (1/1.5 m)
+  straight_length: 4.0
+  radius: 1.5
+
+noise:                # bounded, correlated (AR1) process noise on the leader
+  v_bound: 0.05       # m/s
+  w_bound: 0.15       # rad/s
+  correlation: 0.9
+
+limits:
+  v_max: 1.0
+  w_max: 2.0
+  a_max: 2.0
+  alpha_max: 6.0
+
+contract:             # normalization for the frozen obs/action contract
+  max_range: 3.0
+  v_max: 1.0
+  w_max: 2.0
+
+leader:
+  target_speed: 0.45
+  lookahead: 0.5
+  lookahead_gain: 0.3
+  curvature_slowdown: 0.6
+
+controller:
+  name: analytic
+
+policy:
+  name: always
+
+predictor:
+  name: constant_velocity
+
+reward:               # unused by the analytic controller; here for the RL phase
+  w_formation: 1.0
+  w_heading: 0.1
+  w_comm: 0.0
+  w_action: 0.0
+
+max_formation_error: 5.0
+start_offset: 0.0
