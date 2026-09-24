@@ -7,8 +7,8 @@ import numpy as np
 import pytest
 
 from formation_core.config import ComponentConfig, EpisodeConfig, SuiteConfig
-from formation_core.contract import build_observation, observation_space
-from formation_core.controllers import AnalyticFollower, ZeroController
+from formation_core.contract import ACTION_DIM, OBS_DIM, observation_space
+from formation_core.controllers import AnalyticCentralized, ZeroController
 from formation_core.env import FastFormationEnv, FormationEnv
 from formation_core.metrics import STEP_FIELDS
 from formation_core.runner import build_controller, run_episode, run_suite
@@ -29,8 +29,10 @@ def test_reset_and_step_mirror_gymnasium_signatures():
     obs, info = env.reset(seed=3)
     assert observation_space(env.config.contract).contains(obs)
     assert 'leader_state' in info and 'transmitted' in info
+    # v2.0: the follower has an uplink of its own.
+    assert 'follower_estimate' in info and 'follower_age' in info
 
-    out = env.step(np.zeros(2, dtype=np.float32))
+    out = env.step(np.zeros(ACTION_DIM, dtype=np.float32))
     assert len(out) == 5
     obs, reward, terminated, truncated, info = out
     assert observation_space(env.config.contract).contains(obs)
@@ -42,7 +44,7 @@ def test_episode_truncates_at_configured_length():
     config = short_config()
     env = FastFormationEnv(config)
     env.reset(seed=0)
-    controller = AnalyticFollower(config.contract)
+    controller = AnalyticCentralized(config.contract, leader=config.leader)
     steps = 0
     terminated = truncated = False
     obs, _ = env.reset(seed=0)
@@ -59,7 +61,7 @@ def test_same_seed_is_bit_for_bit_reproducible():
     for _ in range(2):
         env = FastFormationEnv(config)
         obs, _ = env.reset(seed=11)
-        controller = AnalyticFollower(config.contract)
+        controller = AnalyticCentralized(config.contract, leader=config.leader)
         rows = []
         for _ in range(60):
             obs, reward, _, _, info = env.step(controller.act(obs))
@@ -74,7 +76,7 @@ def test_different_seeds_differ():
     for seed in (0, 1):
         env = FastFormationEnv(config)
         obs, _ = env.reset(seed=seed)
-        controller = AnalyticFollower(config.contract)
+        controller = AnalyticCentralized(config.contract, leader=config.leader)
         for _ in range(60):
             obs, _, _, _, info = env.step(controller.act(obs))
         finals.append(info['leader_state'].to_array())
@@ -82,36 +84,55 @@ def test_different_seeds_differ():
 
 
 def test_policy_choice_does_not_disturb_the_leader():
-    """Separate RNG streams: changing the policy must not change the leader."""
+    """Separate RNG streams: changing the policy must not change the leader.
+
+    Under v2.0 the leader is commanded rather than scripted, so the commands
+    are held fixed here; what is being tested is that a stochastic transmission
+    policy never draws from the leader's noise stream.
+    """
     base = short_config()
+    command = np.array([0.4, 0.1, 0.4, 0.0], dtype=np.float32)
     leaders = []
     for policy in (ComponentConfig('always'), ComponentConfig('random', {'p': 0.3})):
         env = FastFormationEnv(base.with_overrides(policy=policy))
         env.reset(seed=5)
-        controller = ZeroController()
-        obs = np.zeros(10, dtype=np.float32)
         track = []
         for _ in range(50):
-            obs, _, _, _, info = env.step(controller.act(obs))
+            _, _, _, _, info = env.step(command)
             track.append(info['leader_state'].to_array())
         leaders.append(np.array(track))
     np.testing.assert_allclose(leaders[0], leaders[1], atol=1e-12)
 
 
-def test_observation_is_built_from_the_estimate_not_ground_truth():
-    """The core guarantee of the task: the follower never sees the truth."""
+def test_observation_is_built_from_the_estimates_not_ground_truth():
+    """The core guarantee of the task: the controller never sees the truth.
+
+    v2.0 checks BOTH uplinks: with transmission effectively switched off, each
+    robot's estimate drifts away from its true state, and the observation has
+    to follow the estimates.
+    """
+    from formation_core.contract import build_observation
+
     config = short_config(policy=ComponentConfig('periodic', {'k': 10_000}))
     env = FastFormationEnv(config)
     obs, _ = env.reset(seed=2)
     for _ in range(40):
-        obs, _, _, _, info = env.step(np.array([0.3, 0.0], dtype=np.float32))
+        obs, _, _, _, info = env.step(np.array([0.5, 0.2, 0.3, 0.0], dtype=np.float32))
 
-    from_estimate = build_observation(
-        info['follower_state'], info['leader_estimate'], config.offset_d, config.contract)
-    from_truth = build_observation(
-        info['follower_state'], info['leader_state'], config.offset_d, config.contract)
-    np.testing.assert_allclose(obs, from_estimate, atol=1e-9)
-    assert not np.allclose(obs, from_truth, atol=1e-6)  # they really have diverged
+    def rebuild(leader, follower):
+        lookahead, tangent = env.path.lookahead_pose(
+            leader.xy, config.contract.lookahead_distance)
+        return build_observation(
+            leader, follower, lookahead, tangent,
+            info['age'], info['follower_age'], config.offset_d, config.contract)
+
+    np.testing.assert_allclose(
+        obs, rebuild(info['leader_estimate'], info['follower_estimate']), atol=1e-9)
+    # Both estimates really have drifted off their true states by now.
+    assert info['estimate_error'] > 1e-3
+    assert info['follower_estimate_error'] > 1e-3
+    assert not np.allclose(
+        obs, rebuild(info['leader_state'], info['follower_state']), atol=1e-6)
 
 
 def test_actions_are_clipped_to_limits():
@@ -119,9 +140,10 @@ def test_actions_are_clipped_to_limits():
     env = FastFormationEnv(config)
     env.reset(seed=0)
     for _ in range(20):
-        _, _, _, _, info = env.step(np.array([50.0, -50.0]))
-    assert abs(info['follower_state'].v) <= config.limits.v_max + 1e-9
-    assert abs(info['follower_state'].w) <= config.limits.w_max + 1e-9
+        _, _, _, _, info = env.step(np.array([50.0, -50.0, 50.0, -50.0]))
+    for robot in ('leader_state', 'follower_state'):
+        assert abs(info[robot].v) <= config.limits.v_max + 1e-9
+        assert abs(info[robot].w) <= config.limits.w_max + 1e-9
 
 
 def test_analytic_controller_holds_formation_with_perfect_communication():
@@ -152,12 +174,12 @@ def test_runner_accepts_any_backend_implementing_the_interface():
 
         def reset(self, *, seed=None, options=None):
             self.n = 0
-            return np.zeros(10, dtype=np.float32), self._info()
+            return np.zeros(OBS_DIM, dtype=np.float32), self._info()
 
         def step(self, action):
             self.n += 1
             done = self.n >= 5
-            return np.zeros(10, dtype=np.float32), 0.0, False, done, self._info()
+            return np.zeros(OBS_DIM, dtype=np.float32), 0.0, False, done, self._info()
 
         def _info(self):
             from formation_core.geometry import RobotState
@@ -169,7 +191,7 @@ def test_runner_accepts_any_backend_implementing_the_interface():
                 'prediction_error': 0.0, 'estimate_error': 0.0, 'path_error': 0.0,
                 'errors': {'longitudinal': 0.0, 'lateral': 0.0,
                            'heading': 0.0, 'euclidean': 0.0},
-                'action': np.zeros(2), 'reward': 0.0,
+                'action': np.zeros(ACTION_DIM), 'reward': 0.0,
             }
 
     config = short_config()
@@ -237,5 +259,22 @@ def test_stress_suite_is_actually_harder():
 def test_build_controller_from_config():
     config = short_config(controller=ComponentConfig('analytic', {'k_bearing': 3.0}))
     controller = build_controller(config)
-    assert isinstance(controller, AnalyticFollower)
-    assert controller.k_bearing == 3.0
+    assert isinstance(controller, AnalyticCentralized)
+    assert controller.follower.gains.k_bearing == 3.0
+    # The leader's speed settings reach the controller without being observations.
+    assert controller.target_speed == config.leader.target_speed
+
+
+def test_the_centralized_controller_drives_both_robots():
+    """v2.0's defining property: one act() call moves the leader too."""
+    config = short_config()
+    env = FastFormationEnv(config)
+    obs, _ = env.reset(seed=0)
+    controller = build_controller(config)
+    action = controller.act(obs)
+    assert np.asarray(action).shape == (ACTION_DIM,)
+    for _ in range(40):
+        obs, _, _, _, info = env.step(controller.act(obs))
+    # The leader is being driven along the path by the controller, not scripted.
+    assert info['leader_state'].v > 0.1
+    assert info['path_error'] < 0.1

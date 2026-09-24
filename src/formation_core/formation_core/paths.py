@@ -68,6 +68,15 @@ class ClosedPath:
         _, _, _, s = self.closest(xy)
         return self.point_at(s + distance)
 
+    def lookahead_pose(self, xy, distance):
+        """Lookahead point ``distance`` ahead of ``xy``, and the tangent there.
+
+        One call for what the centralized observation needs, so the expensive
+        nearest-vertex search runs once per control step instead of twice.
+        """
+        _, _, _, s = self.closest(xy)
+        return self.point_at(s + distance), self.tangent_at(s + distance)
+
     def tracking_error(self, xy):
         """Distance from ``xy`` to the path -- the leader's path-tracking error."""
         return self.closest(xy)[2]

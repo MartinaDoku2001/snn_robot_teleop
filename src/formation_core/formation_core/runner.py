@@ -24,9 +24,15 @@ def build_env(config):
 
 
 def build_controller(config):
-    """Construct the follower controller named in ``config``."""
+    """Construct the centralized controller named in ``config``.
+
+    ``leader`` carries the task's speed settings, which a controller driving the
+    leader needs and which are not part of the observation. It reaches only
+    controllers that ask for it (see ``Controller.wants_leader_config``).
+    """
     return make_controller(
-        config.controller.name, config=config.contract, **config.controller.params)
+        config.controller.name, config=config.contract, leader=config.leader,
+        **config.controller.params)
 
 
 def run_episode(config, env=None, controller=None, recorder=None, label=''):

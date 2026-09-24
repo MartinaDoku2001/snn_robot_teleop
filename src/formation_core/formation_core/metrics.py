@@ -71,6 +71,11 @@ def _stats(values, prefix):
 
 #: CSV columns, in order. Frozen alongside the contract so downstream analysis
 #: scripts can rely on the layout.
+#:
+#: v2.0 note: the unprefixed estimate/transmitted/received/age/prediction_error
+#: columns keep their v1.x meaning -- they describe the LEADER's uplink -- and
+#: the follower's own uplink is appended with a ``follower_`` prefix. The two
+#: action columns became four, because the controller now drives both robots.
 STEP_FIELDS = (
     'step', 'time',
     'leader_x', 'leader_y', 'leader_theta', 'leader_v', 'leader_w',
@@ -79,7 +84,13 @@ STEP_FIELDS = (
     'error_longitudinal', 'error_lateral', 'error_heading', 'error_euclidean',
     'path_error', 'estimate_error', 'prediction_error',
     'transmitted', 'received', 'age',
-    'action_v', 'action_w', 'reward',
+    'follower_estimate_x', 'follower_estimate_y', 'follower_estimate_theta',
+    'follower_estimate_v', 'follower_estimate_w',
+    'follower_estimate_error', 'follower_prediction_error',
+    'follower_transmitted', 'follower_received', 'follower_age',
+    'messages',
+    'action_lead_v', 'action_lead_w', 'action_foll_v', 'action_foll_w',
+    'reward',
 )
 
 
@@ -96,8 +107,14 @@ class EpisodeRecorder:
         leader = info['leader_state']
         follower = info['follower_state']
         estimate = info['leader_estimate']
+        # The follower's estimate is v2.0-only; fall back to its true state so a
+        # backend that does not model a follower uplink still records something
+        # meaningful rather than zeros.
+        follower_estimate = info.get('follower_estimate', follower)
         errors = info['errors']
-        action = np.asarray(info.get('action', (0.0, 0.0)), dtype=float).reshape(-1)
+        action = np.asarray(info.get('action', ()), dtype=float).reshape(-1)
+        action = np.pad(action, (0, max(0, 4 - action.size)),
+                        constant_values=float('nan'))[:4]
         self.rows.append({
             'step': int(info['step']),
             'time': float(info['time']),
@@ -119,8 +136,24 @@ class EpisodeRecorder:
             'transmitted': int(bool(info.get('transmitted', False))),
             'received': int(bool(info.get('received', False))),
             'age': int(info.get('age', 0)),
-            'action_v': float(action[0]) if action.size > 0 else float('nan'),
-            'action_w': float(action[1]) if action.size > 1 else float('nan'),
+            'follower_estimate_x': follower_estimate.x,
+            'follower_estimate_y': follower_estimate.y,
+            'follower_estimate_theta': follower_estimate.theta,
+            'follower_estimate_v': follower_estimate.v,
+            'follower_estimate_w': follower_estimate.w,
+            'follower_estimate_error': float(
+                info.get('follower_estimate_error', float('nan'))),
+            'follower_prediction_error': float(
+                info.get('follower_prediction_error', float('nan'))),
+            'follower_transmitted': int(bool(info.get('follower_transmitted', False))),
+            'follower_received': int(bool(info.get('follower_received', False))),
+            'follower_age': int(info.get('follower_age', 0)),
+            'messages': int(info.get(
+                'messages', int(bool(info.get('transmitted', False))))),
+            'action_lead_v': float(action[0]),
+            'action_lead_w': float(action[1]),
+            'action_foll_v': float(action[2]),
+            'action_foll_w': float(action[3]),
             'reward': float(info.get('reward', float('nan'))),
         })
 
@@ -148,6 +181,7 @@ class EpisodeRecorder:
         out.update(_stats(self.column('error_euclidean'), 'formation'))
         out.update(_stats(self.column('path_error'), 'path'))
         out.update(_stats(self.column('estimate_error'), 'estimate'))
+        out.update(_stats(self.column('follower_estimate_error'), 'follower_estimate'))
 
         steps = len(self.rows)
         transmitted = self.column('transmitted') if steps else np.zeros(0)
@@ -160,6 +194,21 @@ class EpisodeRecorder:
         out['messages_per_second'] = float(total / (steps * self.dt)) if steps else float('nan')
         out['aoi_mean'] = float(ages.mean()) if steps else float('nan')
         out['aoi_max'] = float(ages.max()) if steps else float('nan')
+
+        # v2.0: both robots transmit. The unprefixed figures stay the LEADER's,
+        # so a v1.x-shaped comparison (the Phase 1 Pareto sweep) still means what
+        # it meant; the TOTAL is what Phase 4 pays for, normalized per robot so
+        # it stays a rate in [0, 1].
+        follower_tx = self.column('follower_transmitted') if steps else np.zeros(0)
+        follower_ages = self.column('follower_age') if steps else np.zeros(0)
+        follower_total = int(follower_tx.sum()) if steps else 0
+        out['follower_messages'] = follower_total
+        out['follower_comm_rate'] = float(follower_total / steps) if steps else float('nan')
+        out['follower_aoi_mean'] = float(follower_ages.mean()) if steps else float('nan')
+        out['follower_aoi_max'] = float(follower_ages.max()) if steps else float('nan')
+        out['messages_total'] = total + follower_total
+        out['comm_rate_total'] = (
+            float((total + follower_total) / (2 * steps)) if steps else float('nan'))
         out['reward_total'] = float(np.nansum(self.column('reward'))) if steps else 0.0
 
         transmit_steps = [int(r['step']) for r in self.rows if r['transmitted']]

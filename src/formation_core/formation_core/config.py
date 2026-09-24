@@ -81,11 +81,20 @@ class RewardConfig:
     Unused by the analytic controller, defined now so the RL phase inherits a
     reward that is already part of the recorded config. Reward is
     ``-(w_formation * euclidean_error + w_heading * |heading_error|
-    + w_comm * transmitted + w_action * ||action||^2)``.
+    + w_path * leader_path_error + w_comm * messages + w_action * ||action||^2)``.
+
+    ``w_path`` arrived with contract v2.0: the controller now drives the leader,
+    so staying on the reference path is its job and has to be paid for. It was
+    free in v1.x, where a scripted pure-pursuit leader tracked the path.
+
+    ``w_comm`` counts messages summed over BOTH robots. It is 0.0 everywhere in
+    Phase 2 and is turned on in Phase 4, but it is plumbed through now so that
+    turning it on is a config change rather than a code change.
     """
 
     w_formation: float = 1.0
     w_heading: float = 0.1
+    w_path: float = 1.0
     w_comm: float = 0.0
     w_action: float = 0.0
 
@@ -111,6 +120,10 @@ class EpisodeConfig:
     reward: RewardConfig = field(default_factory=RewardConfig)
     #: Episode ends early if the follower falls this far from its slot (metres).
     max_formation_error: float = 5.0
+    #: ... or if the LEADER leaves the reference path by this much (metres).
+    #: v2.0 only: the controller drives the leader, so it can now lose the path,
+    #: and a training episode that has should end rather than run to time.
+    max_path_error: float = 3.0
     #: Follower starting offset from its slot (metres, behind), for a settling
     #: transient at t=0 that is identical across policies.
     start_offset: float = 0.0
