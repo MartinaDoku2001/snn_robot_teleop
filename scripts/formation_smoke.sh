@@ -4,10 +4,12 @@
 #   ./scripts/formation_smoke.sh                       # event_triggered, 20 s
 #   DURATION=30 POLICY=periodic K=5 ./scripts/formation_smoke.sh
 #   POLICY=random P=0.1 ./scripts/formation_smoke.sh
+#   CONTROLLER=rl WEIGHTS=/ws/results/rl/actor.pt ./scripts/formation_smoke.sh
 set -e
 if [ ! -f /.dockerenv ]; then
     cd "$(dirname "$0")/.."
     exec docker compose exec -T -e DURATION -e POLICY -e K -e P -e DELTA -e OUT \
+        -e CONTROLLER -e WEIGHTS \
         sim /ws/scripts/formation_smoke.sh "$@"
 fi
 source /opt/ros/humble/setup.bash
@@ -18,6 +20,8 @@ POLICY="${POLICY:-event_triggered}"
 DELTA="${DELTA:-0.05}"
 K="${K:-0}"
 P="${P:--1}"
+CONTROLLER="${CONTROLLER:-}"
+WEIGHTS="${WEIGHTS:-}"
 OUT="${OUT:-/ws/results/gazebo_smoke}"
 LOG=/ws/log/formation_smoke.log
 
@@ -39,10 +43,11 @@ ros2 daemon stop >/dev/null 2>&1 || true
 trap cleanup EXIT
 
 rm -rf "$OUT"
-echo "[smoke] launching: policy=$POLICY delta=$DELTA k=$K duration=${DURATION}s"
+echo "[smoke] launching: policy=$POLICY delta=$DELTA k=$K duration=${DURATION}s controller=${CONTROLLER:-config}"
 setsid ros2 launch formation_gazebo formation.launch.py \
     gui:=false rviz:=false duration:="$DURATION" \
-    policy:="$POLICY" delta:="$DELTA" k:="$K" p:="$P" out:="$OUT" >"$LOG" 2>&1 &
+    policy:="$POLICY" delta:="$DELTA" k:="$K" p:="$P" out:="$OUT" \
+    controller:="$CONTROLLER" weights:="$WEIGHTS" >"$LOG" 2>&1 &
 
 # Gazebo runs below real time, so allow generous wall-clock headroom.
 deadline=$(( $(date +%s) + $(printf '%.0f' "$DURATION") * 12 + 120 ))

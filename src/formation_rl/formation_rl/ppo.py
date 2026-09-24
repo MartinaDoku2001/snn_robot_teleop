@@ -49,9 +49,10 @@ class PPOConfig:
     entropy_coef: float = 0.0
     value_coef: float = 0.5
     max_grad_norm: float = 0.5
-    #: Initial log-std of the exploration Gaussian. The action is a normalized
-    #: velocity, so 0.4 rad/s-ish of initial jitter is a reasonable start.
-    init_log_std: float = -1.0
+    #: Initial log-std of the exploration Gaussian. exp(-1.6) ~ 0.2, i.e. 0.2
+    #: m/s and 0.4 rad/s of initial jitter. Wider than this and the untrained
+    #: policy leaves the path before the critic has learned what the path is.
+    init_log_std: float = -1.6
     hidden: tuple = field(default_factory=lambda: tuple(DEFAULT_HIDDEN))
     seed: int = 0
     #: Episode seeds cycle through this many values, so the policy cannot
@@ -77,7 +78,8 @@ class Critic(nn.Module):
 
     def __init__(self, obs_dim=OBS_DIM, hidden=(64, 64)):
         super().__init__()
-        self.net = mlp((obs_dim, *hidden, 1), activation=nn.Tanh)
+        # gain 1.0 on the value head, as in the standard recipe.
+        self.net = mlp((obs_dim, *hidden, 1), activation=nn.Tanh, output_gain=1.0)
 
     def forward(self, obs):
         return self.net(obs).squeeze(-1)

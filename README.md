@@ -329,8 +329,9 @@ python3 -m formation_core suite --suite configs/stress_suite.yaml --policy perio
 # THE key artifact: the Pareto sweep over all three families, with the check
 python3 -m formation_core sweep --check --out results/sweep
 
-# unit tests (74)
+# unit tests: 79 core + 23 gazebo + 15 rl
 python3 -m pytest tests -q
+python3 -m pytest ../formation_gazebo/tests ../formation_rl/tests -q
 ```
 
 ### Figures for a talk
@@ -499,7 +500,7 @@ src/formation_rl/                   PPO controller (torch + gymnasium live HERE)
   formation_rl/policy.py            RLController: wraps an actor as a Controller
   formation_rl/ppo.py               CleanRL-style PPO; imports the actor, does not define it
   formation_rl/gym_env.py           thin Gymnasium view of FastFormationEnv
-  tests/                            14 unit tests
+  tests/                            15 unit tests
 src/formation_gazebo/               ROS 2 nodes, importing formation_core
   formation_gazebo/ros_interface.py odom <-> RobotState, world-frame transforms
   formation_gazebo/leader_node.py   reference-path publisher (no longer drives)

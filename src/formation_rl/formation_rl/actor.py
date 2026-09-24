@@ -43,12 +43,33 @@ from formation_core.contract import ACTION_DIM, OBS_DIM
 DEFAULT_HIDDEN = (64, 64)
 
 
-def mlp(sizes, activation=nn.Tanh, output_activation=nn.Identity):
+def layer_init(layer, std=np.sqrt(2), bias=0.0):
+    """Orthogonal initialization, the standard PPO recipe.
+
+    The gain on the FINAL layer matters more than anything else here: with the
+    default initialization the untrained policy emits large actions, and on a
+    task where a large action drives the robot off the path within a second,
+    exploration destroys every episode before the value function has learned
+    anything. A gain of 0.01 starts the policy near zero action and lets the
+    Gaussian do the exploring.
+
+    This is initialization, not architecture -- it leaves the network a plain
+    MLP and does not affect SNN conversion.
+    """
+    nn.init.orthogonal_(layer.weight, std)
+    nn.init.constant_(layer.bias, bias)
+    return layer
+
+
+def mlp(sizes, activation=nn.Tanh, output_activation=nn.Identity,
+        output_gain=0.01):
     """A plain feedforward stack. No normalization layers -- see the module doc."""
     layers = []
     for i in range(len(sizes) - 1):
-        act = activation if i < len(sizes) - 2 else output_activation
-        layers += [nn.Linear(sizes[i], sizes[i + 1]), act()]
+        last = i == len(sizes) - 2
+        act = output_activation if last else activation
+        gain = output_gain if last else np.sqrt(2)
+        layers += [layer_init(nn.Linear(sizes[i], sizes[i + 1]), std=gain), act()]
     return nn.Sequential(*layers)
 
 

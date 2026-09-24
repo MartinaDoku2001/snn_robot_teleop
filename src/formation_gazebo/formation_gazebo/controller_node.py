@@ -29,6 +29,8 @@ Published:   /<leader>/cmd_vel, /<follower>/cmd_vel,
 
 from __future__ import annotations
 
+import os
+
 import numpy as np
 import rclpy
 from nav_msgs.msg import Odometry
@@ -100,8 +102,13 @@ class ControllerNode(Node):
             _import_provider(name)
         # The REQUESTED component, as the fast twin records it: the constructed
         # controller would also carry its default gains, and the two backends'
-        # CSVs have to stay comparable string-for-string.
-        self.controller_cfg = ComponentConfig(name, params)
+        # CSVs have to stay comparable string-for-string. A weights path is
+        # recorded by basename for the same reason -- the fast twin does, and
+        # the absolute path differs between a container and a workstation.
+        announced = dict(params)
+        if 'weights' in announced:
+            announced['weights'] = os.path.basename(announced['weights'])
+        self.controller_cfg = ComponentConfig(name, announced)
         self.controller = make_controller(
             name, config=self.config.contract, leader=self.config.leader, **params)
         self.controller.reset()
