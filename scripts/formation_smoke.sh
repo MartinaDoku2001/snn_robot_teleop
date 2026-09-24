@@ -44,10 +44,15 @@ trap cleanup EXIT
 
 rm -rf "$OUT"
 echo "[smoke] launching: policy=$POLICY delta=$DELTA k=$K duration=${DURATION}s controller=${CONTROLLER:-config}"
+# ros2 launch rejects `name:=` with an empty value, so optional arguments are
+# only passed when they are actually set.
+EXTRA=()
+[ -n "$CONTROLLER" ] && EXTRA+=("controller:=$CONTROLLER")
+[ -n "$WEIGHTS" ] && EXTRA+=("weights:=$WEIGHTS")
 setsid ros2 launch formation_gazebo formation.launch.py \
     gui:=false rviz:=false duration:="$DURATION" \
     policy:="$POLICY" delta:="$DELTA" k:="$K" p:="$P" out:="$OUT" \
-    controller:="$CONTROLLER" weights:="$WEIGHTS" >"$LOG" 2>&1 &
+    "${EXTRA[@]}" >"$LOG" 2>&1 &
 
 # Gazebo runs below real time, so allow generous wall-clock headroom.
 deadline=$(( $(date +%s) + $(printf '%.0f' "$DURATION") * 12 + 120 ))

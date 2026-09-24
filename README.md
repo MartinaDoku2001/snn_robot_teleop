@@ -603,7 +603,42 @@ controller. Centralizing did not cost accuracy; it slightly improved it,
 because the leader is now steered from the same lookahead the follower is
 holding station against.
 
-PPO_RESULTS_PLACEHOLDER
+#### PPO against the analytic baseline
+
+1M steps, ~8 minutes on CPU. Same suites, same seeds, same runner:
+
+| suite | controller | formation RMS (m) | formation max (m) | path RMS (m) |
+|---|---|---|---|---|
+| eval | analytic | 0.0450 +- 0.0003 | 0.0749 +- 0.0024 | **0.0103** +- 0.0004 |
+| eval | **rl** | **0.0182** +- 0.0003 | **0.0427** +- 0.0021 | 0.0394 +- 0.0012 |
+| stress | analytic | 0.1085 +- 0.0006 | 0.1611 +- 0.0033 | **0.0178** +- 0.0004 |
+| stress | **rl** | **0.0571** +- 0.0013 | **0.1203** +- 0.0054 | 0.0630 +- 0.0028 |
+
+**Read this as a trade, not a clean win.** On formation error -- the task metric
+Phase 1 defined -- PPO beats the analytic controller by 59% on eval and 47% on
+stress, and it also covers more ground (2.48 laps against 1.84 in a 60 s
+episode, at 0.72 m/s against 0.53). It pays for that with path tracking:
+0.039 m against 0.010 m, nearly four times worse. The learned policy discovered
+that cutting corners buys formation accuracy, and with `w_path` equal to
+`w_formation` the reward is happy to take that deal. Raising `w_path` is the
+knob if path fidelity matters more than the trade suggests.
+
+The same holds in Gazebo, 500 steps, perfect comms:
+
+| controller | formation RMS (m) | path RMS (m) | distance (m) |
+|---|---|---|---|
+| analytic | 0.0399 | 0.0082 | 10.02 |
+| rl | **0.0158** | 0.0375 | 17.83 |
+
+Two findings about the training itself are recorded in the judgment-call table
+above, because both are consequences of centralizing the controller rather than
+PPO tuning: the reward needed a **progress** term (parking scored better than
+driving) and a **terminal penalty** (crashing scored better than finishing).
+A third was ordinary PPO practice that cost a full run to rediscover:
+**orthogonal initialization with a 0.01 gain on the output layer**. Without it
+the untrained policy emitted large actions, left the path within a second, and
+plateaued at -1.7 per step; with it, the same run converged to +0.386, against
+the analytic controller's +0.371.
 
 ### Where the next phases plug in
 

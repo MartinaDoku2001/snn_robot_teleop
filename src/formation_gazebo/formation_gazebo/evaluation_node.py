@@ -133,6 +133,9 @@ class EvaluationNode(Node):
         self.step_index = 0
         self.start_time = None
         self.finished = False
+        #: Leader arc length, so `distance` and the progress column mean the
+        #: same thing here as they do in the fast twin instead of reading 0.
+        self._arc = None
         self.timer = self.create_timer(self.config.dt, self.on_timer)
         self.get_logger().info(
             f'evaluating {self.config.steps} steps ({self.config.duration:.1f} s) '
@@ -177,6 +180,9 @@ class EvaluationNode(Node):
 
         leader_tx = leader_up.take_transmitted()
         follower_tx = follower_up.take_transmitted()
+        arc = self.path.arc_length_at(leader.xy)
+        progress = 0.0 if self._arc is None else self.path.arc_delta(self._arc, arc)
+        self._arc = arc
         errors = formation_errors(follower, leader, self.config.offset_d)
         self.recorder.record({
             'step': self.step_index,
@@ -198,6 +204,7 @@ class EvaluationNode(Node):
             'messages': int(leader_tx) + int(follower_tx),
             'errors': errors,
             'path_error': float(self.path.tracking_error(leader.xy)),
+            'progress': progress,
             'action': self.action,
             'reward': float('nan'),
         })
@@ -246,7 +253,8 @@ class EvaluationNode(Node):
             f"path_rms={metrics['path_rms']:.4f} m  "
             f"comm_rate={metrics['comm_rate']:.4f} ({metrics['messages']} messages)  "
             f"comm_rate_total={metrics['comm_rate_total']:.4f} "
-            f"({metrics['messages_total']} messages)")
+            f"({metrics['messages_total']} messages)  "
+            f"distance={metrics['distance']:.2f} m")
         self.get_logger().info(f'wrote {csv_path}')
         if bool(self.get_parameter('shutdown_when_done').value):
             raise SystemExit(0)
