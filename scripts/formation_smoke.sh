@@ -58,20 +58,29 @@ check() {
 echo '[smoke] checks:'
 check 'leader, comm, controller and evaluation nodes started' \
       "$(grep -c 'ready\|evaluating' "$LOG")"
-check 'estimate/observation/action topics published' \
-      "$(grep -c 'formation_comm_interface\|formation_controller' "$LOG")"
+check 'both comm interfaces and the controller started' \
+      "$(grep -c 'formation_comm_\|formation_controller' "$LOG")"
 check 'unique world->odom transforms (no stale simulation)' \
       "$(grep -c 'resolved static transform' "$LOG")"
 check 'episode completed' "$(grep -c 'EPISODE COMPLETE' "$LOG")"
-check 'episode.csv written' "$(ls "$OUT"/episode.csv 2>/dev/null | wc -l)"
-check 'metrics.csv written' "$(ls "$OUT"/metrics.csv 2>/dev/null | wc -l)"
-# The recorded policy must be the one that RAN, not the one in the YAML.
-check "metrics.csv reports policy=$POLICY" \
+# v2.0: BOTH robots have an uplink, so both must have been recorded.
+check 'both robots uplinked' \
       "$(python3 -c "
 import csv
 with open('$OUT/metrics.csv') as f:
     row = next(csv.DictReader(f))
-print(int(row['policy'].split('(')[0] == '$POLICY'))
+print(int(int(row['messages']) > 0 and int(row['follower_messages']) > 0))
+" 2>/dev/null || echo 0)"
+check 'episode.csv written' "$(ls "$OUT"/episode.csv 2>/dev/null | wc -l)"
+check 'metrics.csv written' "$(ls "$OUT"/metrics.csv 2>/dev/null | wc -l)"
+# The recorded policy must be the one that RAN, not the one in the YAML.
+check "metrics.csv reports policy=$POLICY on contract 2.0" \
+      "$(python3 -c "
+import csv
+with open('$OUT/metrics.csv') as f:
+    row = next(csv.DictReader(f))
+print(int(row['policy'].split('(')[0] == '$POLICY'
+          and row['contract_version'] == '2.0'))
 " 2>/dev/null || echo 0)"
 
 grep 'EPISODE COMPLETE' "$LOG" | sed 's/.*EPISODE COMPLETE/  /' || true

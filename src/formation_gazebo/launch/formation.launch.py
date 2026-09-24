@@ -1,15 +1,17 @@
-"""Run the formation task in Gazebo.
+"""Run the formation task in Gazebo (contract v2.0).
 
 Brings up the Phase 0 two-robot simulation (spawned on the reference path, in
-an empty arena) and the four formation nodes on top of it:
+an empty arena) and the formation nodes on top of it:
 
-    leader_node          drives /robot1 along the path (pure pursuit + noise)
-    comm_interface_node  decides what /robot2 is allowed to know about /robot1
-    controller_node      contract observation -> action -> /robot2/cmd_vel
+    leader_node          publishes the reference path (it no longer drives)
+    comm_interface_node  ONE PER ROBOT: what the coordinator knows about it
+    controller_node      ONE controller: 16-dim observation -> 4-dim action ->
+                         /robot1/cmd_vel AND /robot2/cmd_vel
     evaluation_node      records the same metrics as the fast twin, writes CSV
 
   ros2 launch formation_gazebo formation.launch.py
   ros2 launch formation_gazebo formation.launch.py policy:=event_triggered delta:=0.05
+  ros2 launch formation_gazebo formation.launch.py controller:=rl
   ros2 launch formation_gazebo formation.launch.py gui:=false duration:=30.0
 
 Set ``sim:=false`` to attach to a simulation that is already running.
@@ -34,34 +36,46 @@ def launch_setup(context):
     duration = float(LaunchConfiguration('duration').perform(context))
     seed = int(LaunchConfiguration('seed').perform(context))
 
-    common = {'use_sim_time': True, 'config': config}
-    comm_params = dict(common)
-    comm_params.update({
+    leader_ns = LaunchConfiguration('leader_namespace').perform(context)
+    follower_ns = LaunchConfiguration('follower_namespace').perform(context)
+
+    common = {'use_sim_time': True, 'config': config, 'seed': seed}
+    comm_params = {
         'policy': policy,
         'k': int(LaunchConfiguration('k').perform(context)),
         'p': float(LaunchConfiguration('p').perform(context)),
         'delta': float(LaunchConfiguration('delta').perform(context)),
-    })
+    }
 
-    nodes = [
-        Node(package='formation_gazebo', executable='leader_node',
-             name='formation_leader', output='screen',
-             parameters=[dict(common, seed=seed)]),
+    # One communication interface per robot. Each owns its own policy,
+    # predictor and estimate, and draws from its own RNG stream (picked by
+    # ``role``), so the two never interfere.
+    interfaces = [
         Node(package='formation_gazebo', executable='comm_interface_node',
-             name='formation_comm_interface', output='screen',
-             parameters=[comm_params]),
+             name=f'formation_comm_{namespace}', output='screen',
+             parameters=[dict(common, **comm_params, robot=namespace, role=role)])
+        for namespace, role in ((leader_ns, 'leader'), (follower_ns, 'follower'))
+    ]
+
+    return interfaces + [
+        Node(package='formation_gazebo', executable='leader_node',
+             name='formation_reference_path', output='screen',
+             parameters=[dict(common, leader_namespace=leader_ns)]),
         Node(package='formation_gazebo', executable='controller_node',
              name='formation_controller', output='screen',
              parameters=[dict(common,
+                              leader_namespace=leader_ns,
+                              follower_namespace=follower_ns,
                               controller=LaunchConfiguration('controller').perform(context))]),
         Node(package='formation_gazebo', executable='evaluation_node',
              name='formation_evaluation', output='screen',
              parameters=[dict(common,
+                              leader_namespace=leader_ns,
+                              follower_namespace=follower_ns,
                               out=LaunchConfiguration('out').perform(context),
                               duration=duration,
                               label=policy or 'config')]),
     ]
-    return nodes
 
 
 def generate_launch_description():
@@ -84,6 +98,8 @@ def generate_launch_description():
 
     return LaunchDescription([
         DeclareLaunchArgument('config', default_value=default_config),
+        DeclareLaunchArgument('leader_namespace', default_value='robot1'),
+        DeclareLaunchArgument('follower_namespace', default_value='robot2'),
         DeclareLaunchArgument('sim', default_value='true',
                               description='also start the Phase 0 simulation'),
         DeclareLaunchArgument('gui', default_value='true'),

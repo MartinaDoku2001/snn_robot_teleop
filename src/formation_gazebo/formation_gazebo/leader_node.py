@@ -1,83 +1,102 @@
-"""Leader node: drives /robot1 around the reference path with pure pursuit.
+"""Reference-path publisher (contract v2.0).
 
-Uses formation_core's :class:`PurePursuitLeader` and :class:`NoiseProcess`
-unchanged, so the leader behaves the same way as in the fast twin.
+Under v1.x this node DROVE ``/robot1`` with pure pursuit. It no longer drives
+anything: the centralized controller commands both robots, so the leader's
+scripted tracker is gone and what remains of this node is the reference the
+task is defined against.
 
-One deliberate difference from the fast twin, because we cannot reach inside
-Gazebo's physics: the fast twin adds process noise to the leader's REALISED
-velocities, while here it is added to the COMMANDED velocities, which the robot
-then tracks through its own dynamics. The effect on predictability -- the thing
-the task cares about -- is the same, but the two are not step-identical.
+It publishes:
+
+* ``/formation/reference_path``  nav_msgs/Path, latched -- the closed path, for
+  RViz and for anything that wants to see the task geometry.
+* ``/formation/lookahead``       geometry_msgs/PointStamped -- the point the
+  controller is currently steering the leader at, republished for
+  visualization as the leader estimate moves.
+
+The controller does NOT consume either topic. The path is a static reference
+derived from the episode config, not a measurement, so both the controller and
+this node build it from the same config with
+``formation_core.paths.make_path``. Sending it over the wire every step would
+add a failure mode (a dropped or late path message steering the robots) in
+exchange for nothing. The topics exist so a human, or a later external
+consumer, can see what the controller is aiming at.
+
+The leader's process noise moved to the controller node, which is now the only
+thing publishing ``/robot1/cmd_vel``.
 """
 
 from __future__ import annotations
 
-import numpy as np
 import rclpy
+from geometry_msgs.msg import PointStamped
+from nav_msgs.msg import Odometry, Path
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 
 from formation_core.config import EpisodeConfig
-from formation_core.controllers import PurePursuitLeader
-from formation_core.dynamics import NoiseProcess
 from formation_core.paths import make_path
 
-from .ros_interface import RobotBridge, wait_for_bridges
+from .ros_interface import ANNOUNCE_QOS, WORLD_FRAME, pose_stamped, odometry_to_state
 
 
-class LeaderNode(Node):
+class ReferencePathNode(Node):
+    """Publishes the reference path, and the leader's current lookahead point."""
 
     def __init__(self):
-        super().__init__('formation_leader')
+        super().__init__('formation_reference_path')
         self.declare_parameter('config', '')
-        self.declare_parameter('namespace', 'robot1')
-        self.declare_parameter('seed', -1)
+        self.declare_parameter('leader_namespace', 'robot1')
+        #: Vertices are ~1 cm apart; RViz does not need all of them.
+        self.declare_parameter('path_stride', 20)
 
         config_path = self.get_parameter('config').value
         self.config = (
             EpisodeConfig.from_yaml(config_path) if config_path else EpisodeConfig())
-        seed = int(self.get_parameter('seed').value)
-        if seed >= 0:
-            self.config = self.config.with_overrides(seed=seed)
-
         self.path = make_path(self.config.path.name, **self.config.path.params)
-        self.controller = PurePursuitLeader(
-            self.path,
-            target_speed=self.config.leader.target_speed,
-            lookahead=self.config.leader.lookahead,
-            lookahead_gain=self.config.leader.lookahead_gain,
-            curvature_slowdown=self.config.leader.curvature_slowdown,
-            limits=self.config.limits)
-        # Same stream layout as the fast twin: leader noise is stream 0.
-        rng = np.random.default_rng(np.random.SeedSequence(self.config.seed).spawn(2)[0])
-        self.noise = NoiseProcess(self.config.noise, rng)
+        self.leader = self.get_parameter('leader_namespace').value.strip('/')
 
-        self.bridge = RobotBridge(self, self.get_parameter('namespace').value)
-        if not wait_for_bridges(self, [self.bridge], timeout=60.0):
-            self.get_logger().error('no odometry from the leader; is the sim running?')
-        else:
-            self.get_logger().info(
-                f'leader ready on {self.bridge.namespace}, path {self.path.name}, '
-                f'target speed {self.config.leader.target_speed} m/s')
-        self.timer = self.create_timer(self.config.dt, self.on_timer)
+        # Latched: RViz and late subscribers get the path without it being
+        # republished on a timer.
+        self.path_pub = self.create_publisher(Path, '/formation/reference_path',
+                                              ANNOUNCE_QOS)
+        self.path_pub.publish(self._path_message())
 
-    def on_timer(self):
-        state = self.bridge.state
-        if state is None:
-            return
-        v, w = self.controller.command(state)
-        dv, dw = self.noise.sample()
-        v, w = self.config.limits.clamp_command(v + dv, w + dw)
-        self.bridge.publish_command(v, w)
+        self.lookahead_pub = self.create_publisher(
+            PointStamped, '/formation/lookahead', 10)
+        self.create_subscription(
+            Odometry, f'/formation/{self.leader}/estimate', self._on_estimate, 10)
 
-    def destroy_node(self):
-        self.bridge.stop()
-        super().destroy_node()
+        self.get_logger().info(
+            f'reference path ready: {self.path.name}, {self.path.length:.2f} m, '
+            f'lookahead {self.config.contract.lookahead_distance} m')
+
+    def _path_message(self):
+        stride = max(int(self.get_parameter('path_stride').value), 1)
+        msg = Path()
+        msg.header.frame_id = WORLD_FRAME
+        msg.header.stamp = self.get_clock().now().to_msg()
+        points = self.path.points[::stride]
+        msg.poses = [pose_stamped(point, msg.header) for point in points]
+        # Close the loop so RViz draws the full circuit.
+        msg.poses.append(pose_stamped(self.path.points[0], msg.header))
+        return msg
+
+    def _on_estimate(self, msg):
+        """Show where the controller is steering the leader, from its estimate."""
+        estimate = odometry_to_state(msg)
+        target, _ = self.path.lookahead_pose(
+            estimate.xy, self.config.contract.lookahead_distance)
+        point = PointStamped()
+        point.header.frame_id = WORLD_FRAME
+        point.header.stamp = msg.header.stamp
+        point.point.x = float(target[0])
+        point.point.y = float(target[1])
+        self.lookahead_pub.publish(point)
 
 
 def main(args=None):
     rclpy.init(args=args)
-    node = LeaderNode()
+    node = ReferencePathNode()
     try:
         rclpy.spin(node)
     except (KeyboardInterrupt, ExternalShutdownException):

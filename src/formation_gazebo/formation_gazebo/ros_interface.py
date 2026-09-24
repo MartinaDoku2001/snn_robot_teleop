@@ -21,7 +21,7 @@ import time
 
 import numpy as np
 import rclpy
-from geometry_msgs.msg import Twist
+from geometry_msgs.msg import PoseStamped, Twist
 from nav_msgs.msg import Odometry
 from rclpy.duration import Duration
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile
@@ -109,6 +109,16 @@ def odometry_to_state(msg, transform=None):
         v=float(msg.twist.twist.linear.x), w=float(msg.twist.twist.angular.z))
 
 
+def pose_stamped(xy, header):
+    """A PoseStamped at ``xy`` with identity orientation, sharing ``header``."""
+    pose = PoseStamped()
+    pose.header = header
+    pose.pose.position.x = float(xy[0])
+    pose.pose.position.y = float(xy[1])
+    pose.pose.orientation.w = 1.0
+    return pose
+
+
 def state_to_odometry(state, stamp=None, frame_id=WORLD_FRAME, child_frame_id=''):
     """Pack a :class:`RobotState` into an Odometry message (world frame).
 
@@ -140,7 +150,8 @@ class RobotBridge:
     """
 
     def __init__(self, node, namespace, world_frame=WORLD_FRAME,
-                 tf_buffer=None, publish_commands=True, require_transform=True):
+                 tf_buffer=None, publish_commands=True, require_transform=True,
+                 subscribe_odometry=True):
         self.node = node
         self.namespace = namespace.strip('/')
         self.world_frame = world_frame
@@ -159,8 +170,13 @@ class RobotBridge:
         if tf_buffer is None:
             self._listener = TransformListener(self.tf_buffer, node)
 
+        #: A command-only bridge does not subscribe at all. The centralized
+        #: controller uses one: it must see the robots ONLY through their
+        #: communication interfaces, and not subscribing is a stronger
+        #: guarantee of that than remembering not to read ``state``.
         self.odom_sub = node.create_subscription(
-            Odometry, f'/{self.namespace}/odom', self._on_odom, 10)
+            Odometry, f'/{self.namespace}/odom', self._on_odom, 10
+        ) if subscribe_odometry else None
         self.cmd_pub = node.create_publisher(
             Twist, f'/{self.namespace}/cmd_vel', 10) if publish_commands else None
 

@@ -1,34 +1,48 @@
-"""Follower controller node.
+"""Centralized controller node (contract v2.0).
 
-Builds the FROZEN contract observation from the follower's own odometry plus
-the leader ESTIMATE published by the comm interface, runs a
-:class:`formation_core.controllers.Controller`, and publishes the scaled action
-to ``/robot2/cmd_vel``.
+ONE controller drives BOTH robots. It builds the frozen 16-dim observation from
+the two estimates the per-robot communication interfaces publish, calls
+:meth:`formation_core.controllers.Controller.act` once, and publishes the four
+resulting numbers as two ``cmd_vel`` messages.
+
+It never reads either robot's odometry directly. Everything it knows about the
+robots arrives through ``/formation/<ns>/estimate`` and ``/formation/<ns>/age``,
+which is what makes the communication policy matter and what keeps the Gazebo
+backend honest against the fast twin.
 
 This node is the drop-in point for later phases: swapping the ``controller``
 parameter from ``analytic`` to ``rl`` or ``snn`` is the ONLY change needed here,
 because the observation, the action scaling and the topics are fixed by the
 contract.
 
-Subscribed:  /<follower>/odom, /formation/leader_estimate
-Published:   /<follower>/cmd_vel, /formation/observation (Float32MultiArray),
-             /formation/action (Float32MultiArray),
-             /formation/controller (std_msgs/String, latched: the EFFECTIVE controller)
+The reference path is built from the episode config, not received over a topic.
+It is a static definition of the task rather than a measurement, and the
+reference-path publisher builds it from the same config (see ``leader_node``).
+
+Subscribed:  /formation/<leader>/estimate, /formation/<leader>/age
+             /formation/<follower>/estimate, /formation/<follower>/age
+Published:   /<leader>/cmd_vel, /<follower>/cmd_vel,
+             /formation/observation (Float32MultiArray, 16),
+             /formation/action (Float32MultiArray, 4),
+             /formation/controller (std_msgs/String, latched: the controller)
 """
 
 from __future__ import annotations
 
+import numpy as np
 import rclpy
 from nav_msgs.msg import Odometry
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
-from std_msgs.msg import Float32MultiArray
+from std_msgs.msg import Float32MultiArray, Int32
 
 from formation_core.config import ComponentConfig, EpisodeConfig
 from formation_core.contract import build_observation, scale_action
 from formation_core.controllers import make_controller
+from formation_core.dynamics import NoiseProcess
+from formation_core.paths import make_path
 
-from .ros_interface import RobotBridge, announce, odometry_to_state, wait_for_bridges
+from .ros_interface import RobotBridge, announce, odometry_to_state
 
 
 class ControllerNode(Node):
@@ -36,29 +50,61 @@ class ControllerNode(Node):
     def __init__(self):
         super().__init__('formation_controller')
         self.declare_parameter('config', '')
+        self.declare_parameter('leader_namespace', 'robot1')
         self.declare_parameter('follower_namespace', 'robot2')
         self.declare_parameter('controller', '')
-        # Stop commanding if the estimate stream dies, rather than driving on
-        # stale data forever.
+        # Stop commanding if either estimate stream dies, rather than driving
+        # on stale data forever.
         self.declare_parameter('estimate_timeout', 1.0)
+        #: Leader process noise. The fast twin perturbs the leader's REALISED
+        #: velocities; Gazebo's physics is not reachable, so the same
+        #: disturbance is injected into the leader's command here. Without it
+        #: the leader is perfectly predictable and the task has no content.
+        self.declare_parameter('leader_noise', True)
+        self.declare_parameter('seed', -1)
 
         config_path = self.get_parameter('config').value
         self.config = (
             EpisodeConfig.from_yaml(config_path) if config_path else EpisodeConfig())
+        seed = int(self.get_parameter('seed').value)
+        if seed >= 0:
+            self.config = self.config.with_overrides(seed=seed)
         name = self.get_parameter('controller').value or self.config.controller.name
         params = self.config.controller.params if name == self.config.controller.name else {}
         # The REQUESTED component, as the fast twin records it: the constructed
         # controller would also carry its default gains, and the two backends'
         # CSVs have to stay comparable string-for-string.
         self.controller_cfg = ComponentConfig(name, params)
-        self.controller = make_controller(name, config=self.config.contract, **params)
+        self.controller = make_controller(
+            name, config=self.config.contract, leader=self.config.leader, **params)
         self.controller.reset()
 
-        self.bridge = RobotBridge(self, self.get_parameter('follower_namespace').value)
-        self.estimate = None
-        self.estimate_time = None
-        self.create_subscription(
-            Odometry, '/formation/leader_estimate', self._on_estimate, 10)
+        self.path = make_path(self.config.path.name, **self.config.path.params)
+        # Stream 0, matching the fast twin's leader-noise stream.
+        rng = np.random.default_rng(
+            np.random.SeedSequence(self.config.seed).spawn(3)[0])
+        self.noise = NoiseProcess(self.config.noise, rng)
+
+        self.leader = self.get_parameter('leader_namespace').value.strip('/')
+        self.follower = self.get_parameter('follower_namespace').value.strip('/')
+        # Command-only bridges: this node publishes cmd_vel and must not read
+        # odometry, or it would be seeing past the communication link.
+        self.leader_bridge = RobotBridge(
+            self, self.leader, subscribe_odometry=False, require_transform=False)
+        self.follower_bridge = RobotBridge(
+            self, self.follower, subscribe_odometry=False, require_transform=False)
+
+        self.estimates = {self.leader: None, self.follower: None}
+        self.ages = {self.leader: 0, self.follower: 0}
+        self.estimate_times = {self.leader: None, self.follower: None}
+        for robot in (self.leader, self.follower):
+            self.create_subscription(
+                Odometry, f'/formation/{robot}/estimate',
+                lambda msg, r=robot: self._on_estimate(r, msg), 10)
+            self.create_subscription(
+                Int32, f'/formation/{robot}/age',
+                lambda msg, r=robot: self.ages.__setitem__(r, int(msg.data)), 10)
+
         self.obs_pub = self.create_publisher(
             Float32MultiArray, '/formation/observation', 10)
         self.action_pub = self.create_publisher(
@@ -66,45 +112,70 @@ class ControllerNode(Node):
         # Same reason as the comm interface's policy announcement: the
         # controller:= override lives here, so the effective name is published
         # here too.
-        self.controller_pub = announce(self, '/formation/controller', self.controller_cfg)
+        self.controller_pub = announce(
+            self, '/formation/controller', self.controller_cfg)
 
-        if not wait_for_bridges(self, [self.bridge], timeout=60.0):
-            self.get_logger().error('no follower odometry; is the sim running?')
         self.get_logger().info(
-            f'controller ready: {self.controller.name} on '
-            f'{self.bridge.namespace}, offset {self.config.offset_d} m')
+            f'centralized controller ready: {self.controller.name} driving '
+            f'{self.leader} and {self.follower}, offset {self.config.offset_d} m')
         self.timer = self.create_timer(self.config.dt, self.on_timer)
 
-    def _on_estimate(self, msg):
+    # ------------------------------------------------------------- callbacks
+
+    def _on_estimate(self, robot, msg):
         # Already in the world frame: the comm interface publishes it there.
-        self.estimate = odometry_to_state(msg)
-        self.estimate_time = self.get_clock().now()
+        self.estimates[robot] = odometry_to_state(msg)
+        self.estimate_times[robot] = self.get_clock().now()
+
+    def _stale(self):
+        """Seconds since the oldest estimate, or None if one has never arrived."""
+        if any(t is None for t in self.estimate_times.values()):
+            return None
+        now = self.get_clock().now()
+        return max((now - t).nanoseconds * 1e-9 for t in self.estimate_times.values())
+
+    # ------------------------------------------------------------------ loop
 
     def on_timer(self):
-        follower = self.bridge.state
-        if follower is None or self.estimate is None:
+        stale = self._stale()
+        if stale is None:
             return
 
         timeout = float(self.get_parameter('estimate_timeout').value)
-        age = (self.get_clock().now() - self.estimate_time).nanoseconds * 1e-9
-        if timeout > 0.0 and age > timeout:
-            self.bridge.stop()
+        if timeout > 0.0 and stale > timeout:
+            self.leader_bridge.stop()
+            self.follower_bridge.stop()
             self.get_logger().warn(
-                f'no leader estimate for {age:.2f} s; holding still',
+                f'no estimate for {stale:.2f} s; holding both robots still',
                 throttle_duration_sec=5.0)
             return
 
+        leader_estimate = self.estimates[self.leader]
+        follower_estimate = self.estimates[self.follower]
+        lookahead_xy, tangent_xy = self.path.lookahead_pose(
+            leader_estimate.xy, self.config.contract.lookahead_distance)
         obs = build_observation(
-            follower, self.estimate, self.config.offset_d, self.config.contract)
+            leader_estimate, follower_estimate, lookahead_xy, tangent_xy,
+            self.ages[self.leader], self.ages[self.follower],
+            self.config.offset_d, self.config.contract)
+
         action = self.controller.act(obs)
-        v, w = scale_action(action, self.config.contract)
-        self.bridge.publish_command(v, w)
+        leader_command, follower_command = scale_action(action, self.config.contract)
+
+        if bool(self.get_parameter('leader_noise').value):
+            dv, dw = self.noise.sample()
+            leader_command = self.config.limits.clamp_command(
+                leader_command[0] + dv, leader_command[1] + dw)
+
+        self.leader_bridge.publish_command(*leader_command)
+        self.follower_bridge.publish_command(*follower_command)
 
         self.obs_pub.publish(Float32MultiArray(data=[float(x) for x in obs]))
         self.action_pub.publish(Float32MultiArray(data=[float(x) for x in action]))
 
     def destroy_node(self):
-        self.bridge.stop()
+        self.leader_bridge.stop()
+        self.follower_bridge.stop()
         super().destroy_node()
 
 
