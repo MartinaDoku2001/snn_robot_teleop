@@ -640,6 +640,33 @@ the untrained policy emitted large actions, left the path within a second, and
 plateaued at -1.7 per step; with it, the same run converged to +0.386, against
 the analytic controller's +0.371.
 
+### Figures for a talk about the current state
+
+`formation_core figures` writes the **Phase 1** set, which explains the
+transmission-policy result and was measured under the v1.x split controller --
+those figures are stale. The **Phase 2** set explains what the system is now:
+
+```bash
+python3 -m formation_rl figures --out results/figures_phase2 \
+    --weights results/rl/actor.pt \
+    --gazebo-analytic results/gz_analytic --gazebo-rl results/gz_rl
+```
+
+| | Figure | The one question it answers |
+|---|---|---|
+| 1 | `01_architecture` | What is the system now? One controller, two uplinks. |
+| 2 | `02_controllers` | Analytic vs learned, on both suites. |
+| 3 | `03_tradeoff` | What does the learned controller give up? |
+| 4 | `04_trajectories` | Why does it give that up -- it cuts corners. |
+| 5 | `05_training` | PPO converging past the analytic baseline. |
+| 6 | `06_sim_to_sim` | Does it hold in Gazebo? (skipped without the two run dirs) |
+
+`--only architecture controllers tradeoff trajectories training sim_to_sim`
+regenerates a subset. Figures 2-4 run their own episodes on the fast twin
+(about a minute); 1 needs no data at all; 5 reads `training_history.csv` beside
+the weights; 6 reads two Gazebo run directories, which
+`CONTROLLER=... ./scripts/formation_smoke.sh` produces.
+
 ### Where the next phases plug in
 
 * **Spiking actor**: replace `formation_rl/actor.py` only -- see NEXT PHASES.

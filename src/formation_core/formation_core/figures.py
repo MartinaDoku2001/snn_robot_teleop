@@ -94,7 +94,7 @@ def _describe(component):
     return f'{family}  ({inner})'
 
 
-def _save(fig, out_dir, name):
+def save_figure(fig, out_dir, name):
     """Write PNG for slides and PDF for anything that gets printed."""
     os.makedirs(out_dir, exist_ok=True)
     paths = []
@@ -173,7 +173,7 @@ def figure_matched_budget(suite, out_dir, progress=print):
              f'{suite.name} suite, {len(suite.seeds)} seeds, mean ± 95% CI — '
              "random's CI is wider than periodic's whole bar",
              color=INK_SECONDARY, fontsize=9 * SCALE)
-    return _save(fig, out_dir, '01_matched_budget')
+    return save_figure(fig, out_dir, '01_matched_budget')
 
 
 # ---------------------------------------------------------------- 2. pareto
@@ -268,7 +268,7 @@ def figure_mechanism(config, out_dir):
         'A comparable number of messages, spent differently',
         color=INK, fontsize=12 * SCALE, loc='left', pad=12)
     fig.tight_layout()
-    return _save(fig, out_dir, '03_mechanism')
+    return save_figure(fig, out_dir, '03_mechanism')
 
 
 # ----------------------------------------------------------- 4. trajectories
@@ -347,7 +347,7 @@ def figure_trajectories(config, out_dir):
     fig.suptitle(
         f'Follower track at a matched message budget (seed {config.seed})',
         color=INK, fontsize=12 * SCALE, x=0.02, ha='left', y=1.04)
-    return _save(fig, out_dir, '04_trajectories')
+    return save_figure(fig, out_dir, '04_trajectories')
 
 
 # -------------------------------------------------------------- 5. transfer
@@ -435,7 +435,7 @@ def figure_sim_to_sim(gazebo_dir, gazebo_config, out_dir, progress=print):
              f'Gazebo: one {duration:.0f} s episode per policy, single seed — '
              'this shows the two backends agree, it does not rank the policies',
              color=INK_SECONDARY, fontsize=9 * SCALE)
-    return _save(fig, out_dir, '05_sim_to_sim')
+    return save_figure(fig, out_dir, '05_sim_to_sim')
 
 
 # -------------------------------------------------------------------- entry

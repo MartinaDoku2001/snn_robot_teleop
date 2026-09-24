@@ -3,6 +3,7 @@
     python3 -m formation_rl train --out results/rl
     python3 -m formation_rl train --out results/rl --total-steps 100000
     python3 -m formation_rl benchmark --weights results/rl/actor.pt
+    python3 -m formation_rl figures   --out results/figures_phase2
 """
 
 import sys
@@ -12,6 +13,8 @@ USAGE = """usage: python3 -m formation_rl <command> [options]
 commands:
   train      train the PPO actor on the fast twin, write actor.pt
   benchmark  compare a trained actor against the analytic controller
+  figures    the Phase 2 figure set: what the system is now, and how the two
+             controllers compare
 
 Add --help after a command for its options.
 """
@@ -30,6 +33,9 @@ def main(argv=None):
     if command == 'benchmark':
         from .cli import main_benchmark
         return main_benchmark(rest)
+    if command == 'figures':
+        from .figures import main as figures_main
+        return figures_main(rest)
 
     print(f'unknown command {command!r}\n\n{USAGE}', file=sys.stderr)
     return 2

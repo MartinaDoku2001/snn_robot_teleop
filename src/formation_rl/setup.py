@@ -20,6 +20,7 @@ setup(
         'console_scripts': [
             'formation-rl-train = formation_rl.cli:main_train',
             'formation-rl-benchmark = formation_rl.cli:main_benchmark',
+            'formation-rl-figures = formation_rl.figures:main',
         ],
     },
 )
