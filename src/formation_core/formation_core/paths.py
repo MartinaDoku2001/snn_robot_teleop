@@ -77,6 +77,21 @@ class ClosedPath:
         _, _, _, s = self.closest(xy)
         return self.point_at(s + distance), self.tangent_at(s + distance)
 
+    def arc_delta(self, previous, current):
+        """Shortest signed arc-length change from ``previous`` to ``current``.
+
+        Crossing the start line is a step of +1 cm, not -17 m, which is what a
+        naive subtraction would report on a closed path.
+        """
+        delta = (float(current) - float(previous)) % self.length
+        if delta > self.length / 2.0:
+            delta -= self.length
+        return float(delta)
+
+    def arc_length_at(self, xy):
+        """Arc length of the nearest point on the path to ``xy``."""
+        return self.closest(xy)[3]
+
     def tracking_error(self, xy):
         """Distance from ``xy`` to the path -- the leader's path-tracking error."""
         return self.closest(xy)[2]

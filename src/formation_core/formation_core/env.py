@@ -90,6 +90,8 @@ class FastFormationEnv(FormationEnv):
         self._rng = None
         self._last_leader_result = None
         self._last_follower_result = None
+        #: Leader arc length on the path, for the progress reward.
+        self._arc = 0.0
 
     # ------------------------------------------------------------------ setup
 
@@ -138,6 +140,7 @@ class FastFormationEnv(FormationEnv):
         self.follower_comm.reset(self.follower_state, follower_policy_rng)
 
         self.step_index = 0
+        self._arc = self.path.arc_length_at(self.leader_state.xy)
         leader_result = self.leader_comm.update(self.leader_state, time=0.0)
         follower_result = self.follower_comm.update(self.follower_state, time=0.0)
         self._last_leader_result = leader_result
@@ -165,6 +168,10 @@ class FastFormationEnv(FormationEnv):
         self.step_index += 1
         time = self.step_index * cfg.dt
 
+        arc = self.path.arc_length_at(self.leader_state.xy)
+        progress = self.path.arc_delta(self._arc, arc)
+        self._arc = arc
+
         # 2. each robot reports up to the coordinator, or is dead-reckoned
         leader_result = self.leader_comm.update(self.leader_state, time=time)
         follower_result = self.follower_comm.update(self.follower_state, time=time)
@@ -176,13 +183,17 @@ class FastFormationEnv(FormationEnv):
 
         errors = formation_errors(self.follower_state, self.leader_state, cfg.offset_d)
         path_error = float(self.path.tracking_error(self.leader_state.xy))
-        reward = self._reward(errors, path_error, leader_result, follower_result, action)
+        reward = self._reward(errors, path_error, progress,
+                              leader_result, follower_result, action)
         terminated = bool(
             errors['euclidean'] > cfg.max_formation_error
             or path_error > cfg.max_path_error)
         truncated = bool(self.step_index >= cfg.steps)
+        if terminated:
+            reward -= cfg.reward.terminal_penalty
         info = self._info(leader_result, follower_result, action=action,
-                          reward=reward, errors=errors, path_error=path_error)
+                          reward=reward, errors=errors, path_error=path_error,
+                          progress=progress)
         return obs, reward, terminated, truncated, info
 
     # --------------------------------------------------------------- helpers
@@ -203,19 +214,30 @@ class FastFormationEnv(FormationEnv):
             leader_result.age, follower_result.age,
             cfg.offset_d, cfg.contract)
 
-    def _reward(self, errors, path_error, leader_result, follower_result, action):
+    def _reward(self, errors, path_error, progress,
+                leader_result, follower_result, action):
         w = self.config.reward
         action = np.asarray(action, dtype=float).reshape(-1)
         messages = int(leader_result.transmitted) + int(follower_result.transmitted)
-        return float(-(
-            w.w_formation * errors['euclidean']
-            + w.w_heading * abs(errors['heading'])
-            + w.w_path * path_error
-            + w.w_comm * messages
-            + w.w_action * float(np.sum(action ** 2))))
+        return float(
+            w.w_progress * self._progress_credit(progress)
+            - (w.w_formation * errors['euclidean']
+               + w.w_heading * abs(errors['heading'])
+               + w.w_path * path_error
+               + w.w_comm * messages
+               + w.w_action * float(np.sum(action ** 2))))
+
+    def _progress_credit(self, progress):
+        """Arc length advanced, as a fraction of one step at the target speed.
+
+        Clipped to [-1, 1]: full credit for cruising, none extra for speeding,
+        and going backwards costs.
+        """
+        cruise = self.config.leader.target_speed * self.config.dt
+        return float(np.clip(progress / max(cruise, 1e-9), -1.0, 1.0))
 
     def _info(self, leader_result, follower_result, action, reward,
-              errors=None, path_error=None):
+              errors=None, path_error=None, progress=0.0):
         """Per-step diagnostics. Ground truth lives HERE, never in the observation."""
         if errors is None:
             errors = formation_errors(
@@ -246,6 +268,7 @@ class FastFormationEnv(FormationEnv):
             'messages': int(leader_result.transmitted) + int(follower_result.transmitted),
             'errors': errors,
             'path_error': path_error,
+            'progress': progress,
             'action': np.asarray(action, dtype=float).reshape(-1).copy(),
             'reward': reward,
         }

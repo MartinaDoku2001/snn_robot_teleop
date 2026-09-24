@@ -403,24 +403,47 @@ with 5 messages; periodic k=20: 0.061 m with 20 messages).
 
 ### The frozen contract
 
-`formation_core/contract.py` is the one file later phases must not break. The
-follower observes 10 normalized values in [-1, 1], all relative to itself and
-all derived from the ESTIMATE, and emits 2 normalized actions:
+`formation_core/contract.py` is the one file later phases must not break.
+
+**Version 2.0 (Phase 2).** One centralized controller drives both robots, so
+the observation covers both and the action commands both: **16 observations, 4
+actions**, all normalized to [-1, 1] and all derived from the per-robot
+ESTIMATES, never ground truth.
 
 | idx | name | meaning |
 |---|---|---|
-| 0, 1 | `dx`, `dy` | leader position in follower body frame / `max_range` |
-| 2, 3 | `sin_dtheta`, `cos_dtheta` | leader heading relative to follower |
-| 4, 5 | `ex`, `ey` | slot position in follower body frame / `max_range` |
-| 6, 7 | `v_self`, `w_self` | follower velocities / limits |
-| 8, 9 | `v_leader_est`, `w_leader_est` | estimated leader velocities / limits |
-| action 0, 1 | `v`, `w` | scaled to +-`v_max`, +-`w_max` |
+| 0, 1 | `lead_look_x/y` | path lookahead point in **leader** body frame / `max_range` |
+| 2, 3 | `lead_sin/cos_tangent` | path tangent there, relative to leader heading |
+| 4, 5 | `lead_v`, `lead_w` | estimated leader velocities / limits |
+| 6 | `lead_age` | steps since the leader's estimate was refreshed / `age_max` |
+| 7, 8 | `foll_v`, `foll_w` | estimated follower velocities / limits |
+| 9 | `foll_age` | steps since the follower's estimate was refreshed / `age_max` |
+| 10, 11 | `slot_ex/ey` | slot position in **follower** body frame / `max_range` |
+| 12, 13 | `rel_dx/dy` | leader position in follower body frame / `max_range` |
+| 14, 15 | `rel_sin/cos_dtheta` | leader heading relative to follower |
+| action 0, 1 | `lead_v`, `lead_w` | leader command, scaled to +-`v_max`, +-`w_max` |
+| action 2, 3 | `foll_v`, `foll_w` | follower command, same scaling |
 
 Angles appear only as (sin, cos), so there is no wraparound for a network to
 model; everything is relative, so a policy cannot memorise the path;
 `observation_space` / `action_space` are Box objects mirroring Gymnasium, and
 `reset()`/`step()` already return Gymnasium's tuples, so a Gym wrapper is a
 thin adapter. `CONTRACT_VERSION` is recorded in every result file.
+
+**Why the two age fields are mandatory.** Under perfect communications they read
+~0 every step and carry no information, so nothing in Phase 2 would notice them
+missing. They are the single point where the control half of the project touches
+the communication half: once Phase 3 adds delay and loss and Phase 4 learns a
+per-robot transmission policy, the controller has to know how stale each
+estimate is to act cautiously on an old one. Adding them later would invalidate
+every policy trained before, so they cost two inputs now.
+
+**What changed from v1.0, and why it is a re-freeze rather than a widening.**
+v1.0 was follower-shaped: 10 observations, 2 actions, and deliberately *no* path
+information, on the rule that the follower only had to chase the leader. A
+centralized controller drives the leader, so it needs a path reference. Old
+v1.x CSVs and figures are untouched and stay readable -- they record
+`contract_version` 1.0.
 
 ### Judgment calls (defaults, and why)
 
@@ -435,6 +458,15 @@ thin adapter. `CONTRACT_VERSION` is recorded in every result file.
 | Sweep ranges | k in 1..100, p in 1..0.01, delta in 0..0.3 m | Chosen so all three families span the same 0.01-1.0 rate range, which is what makes matched-rate comparison possible. |
 | Aggregation | mean +- 95% CI, Student-t, 8 seeds | t(7) = 2.365, not 1.96; with 8 seeds the normal approximation understates the interval. |
 | Error sign convention | errors point from follower TO slot | `longitudinal` > 0 means lagging; `lateral` > 0 means the slot is to the follower's left. |
+| `age_max` (v2.0) | 50 steps = 2.5 s | Where the age inputs saturate. Past ~2.5 s a constant-velocity prediction of this leader is worthless, so the controller gains nothing from distinguishing degrees of "hopelessly stale". |
+| `lookahead_distance` (v2.0) | 0.6 m, fixed | The observation's lookahead does NOT scale with speed, unlike `PurePursuitLeader`'s internal one: a learned policy should not have the meaning of its inputs change with the robot's speed. 0.6 m matches what the scripted leader used at its 0.6 m/s cruise. |
+| `w_path` (v2.0) | 1.0 | Keeping the leader on the path became the controller's job when the scripted leader was removed, so it has to be paid for. Weighted equal to formation error. |
+| `w_progress` (v2.0) | 0.5, credited per step and clipped to [-1, 1] | **Centralization created a trivial optimum and this closes it.** Every other term is a penalty, so parking both robots on the path in perfect formation scores ~0 and beats driving. Under v1.x the scripted leader always drove and the follower had to keep up; taking the scripted leader away removed the thing forcing motion. PPO found this immediately: the first trained policy scored 52% "better" than analytic by covering 0.27 laps at 0.04 m/s. Credit is capped at one step of `leader.target_speed`, so there is no reward for speeding and the analytic controller's curvature slowdown is not punished. |
+| `terminal_penalty` (v2.0) | 50.0 | The other trivial optimum: every other term is a penalty, so an episode that ends early accumulates *less* of it than one that holds formation to the end, and PPO learns to drive off the path on purpose. Charged once on divergence, never on truncation. |
+| `w_comm` | 0.0 everywhere | Plumbed through as a count over both robots so Phase 4 turns it on with a config edit, not a code change. |
+| Actor architecture | MLP, 2 x 64, tanh | Deliberately convertible to a population-coded spiking network: no recurrence, no attention, no normalization. 5.5k parameters. |
+| PPO | 600k steps, 8 envs x 256 rollout, lr 3e-4 (linearly decayed), gamma 0.99, lambda 0.95, clip 0.2, 10 epochs x 8 minibatches | Ordinary CleanRL defaults, tuned only enough to beat the analytic baseline. Recorded in `results/rl/ppo_config.json`. |
+| Training seeds | 64 episode seeds, cycled across workers | Each worker resets on a different seed so the policy sees many realisations of the leader's noise instead of memorising one. |
 
 Two things worth knowing when reading the numbers:
 
@@ -450,42 +482,148 @@ Two things worth knowing when reading the numbers:
 ### Layout
 
 ```
-src/formation_core/                 pure Python, pip-installable, no ROS
-  formation_core/contract.py        FROZEN obs/action contract  <- start here
-  formation_core/env.py             FormationEnv + FastFormationEnv
+src/formation_core/                 pure Python, pip-installable, no ROS, no torch
+  formation_core/contract.py        FROZEN obs/action contract v2.0  <- start here
+  formation_core/env.py             FormationEnv + FastFormationEnv (two uplinks)
   formation_core/comm.py            comm interface + Channel hook (Phase 3)
   formation_core/policies.py        always | periodic | random | event_triggered
   formation_core/predictor.py       generic constant-velocity dead reckoning
-  formation_core/controllers.py     Controller interface, analytic follower, leader
+  formation_core/controllers.py     Controller interface, AnalyticCentralized, laws
   formation_core/metrics.py         control + comm metrics, CSV, CI aggregation
   formation_core/sweep.py           Pareto sweep + premise check
+  formation_core/figures.py         the five presentation figures
   configs/                          default | eval_suite | stress_suite
-  tests/                            71 unit tests
+  tests/                            79 unit tests
+src/formation_rl/                   PPO controller (torch + gymnasium live HERE)
+  formation_rl/actor.py             the MLP actor  <- the ANN -> SNN swap point
+  formation_rl/policy.py            RLController: wraps an actor as a Controller
+  formation_rl/ppo.py               CleanRL-style PPO; imports the actor, does not define it
+  formation_rl/gym_env.py           thin Gymnasium view of FastFormationEnv
+  tests/                            14 unit tests
 src/formation_gazebo/               ROS 2 nodes, importing formation_core
   formation_gazebo/ros_interface.py odom <-> RobotState, world-frame transforms
-  formation_gazebo/*_node.py        leader | comm_interface | controller | evaluation
+  formation_gazebo/leader_node.py   reference-path publisher (no longer drives)
+  formation_gazebo/comm_interface_node.py   ONE PER ROBOT
+  formation_gazebo/controller_node.py       ONE controller, both cmd_vels
+  formation_gazebo/evaluation_node.py       records both uplinks
   formation_gazebo/env.py           GazeboFormationEnv (same interface as the twin)
-  launch/formation.launch.py        sim + all four nodes
+  launch/formation.launch.py        sim + reference path + 2 comm + controller + eval
 ```
+
+## Phase 2: one centralized controller
+
+Phase 1 had two controllers: a scripted pure-pursuit leader and a learned-slot
+follower. Phase 2 replaces both with **one controller that commands both
+robots**, under perfect communications. The transmission policy stays
+per-robot -- that is the research question, and it is not a property of the
+controller.
+
+```
+                        ONE centralized controller
+                  obs (16, both robots) -> action (4, both robots)
+                                  ^                |
+                     estimates    |                |  cmd_vel x2 (reliable)
+                                  |                v
+        +-------------------------+----------------+-------------------------+
+        |                                                                    |
+   robot1 comm interface                                        robot2 comm interface
+   (own policy, predictor,                                      (own policy, predictor,
+    estimate, RNG stream)                                        estimate, RNG stream)
+```
+
+Both robots report *up* to the coordinator, where the controller runs. The
+downlink is assumed reliable; Phase 3 models the uplink and says so.
+
+### What changed
+
+| | v1.x | v2.0 |
+|---|---|---|
+| Controller | scripted leader + learned follower | **one**, drives both |
+| Observation / action | 10 / 2 | **16 / 4** |
+| Communication interfaces | 1 (leader -> follower) | **2**, one per robot, both -> coordinator |
+| Path tracking | the scripted leader's job, free | the controller's job, paid for by `w_path` |
+| Estimate staleness | not in the observation | **`lead_age`, `foll_age`** -- mandatory |
+| `leader_node` | drove `/robot1` | publishes the reference path only |
+
+### Running it
+
+```bash
+cd /ws/src/formation_core
+
+# the analytic baseline, on the fast twin
+python3 -m formation_core run --plot
+python3 -m formation_core suite --suite configs/eval_suite.yaml
+
+# train the PPO actor (~4 min on CPU), then benchmark it against analytic
+python3 -m formation_rl train --out results/rl
+python3 -m formation_rl benchmark --weights results/rl/actor.pt
+
+# either controller, on the fast twin
+python3 -m formation_core suite --controller analytic
+python3 -m formation_core suite --controller rl
+```
+
+In Gazebo, the launch file starts the reference-path publisher, **two**
+communication interfaces and the one controller:
+
+```bash
+ros2 launch formation_gazebo formation.launch.py                    # analytic
+ros2 launch formation_gazebo formation.launch.py controller:=rl     # learned
+./scripts/formation_smoke.sh                                        # headless check
+POLICY=always ./scripts/formation_smoke.sh                          # perfect comms
+```
+
+### Results
+
+Analytic centralized controller, perfect communications, mean +- 95% CI over
+the 8 fixed seeds:
+
+| suite | formation RMS (m) | formation max (m) | path RMS (m) |
+|---|---|---|---|
+| eval | 0.0450 +- 0.0003 | 0.0749 +- 0.0024 | 0.0103 +- 0.0004 |
+| stress | 0.1085 +- 0.0006 | 0.1611 +- 0.0033 | 0.0178 +- 0.0004 |
+
+In Gazebo, 500 steps with perfect communications: **0.0399 m** formation RMS
+and 0.0082 m path RMS, against 0.0489 m and 0.0093 m for the v1.x split
+controller. Centralizing did not cost accuracy; it slightly improved it,
+because the leader is now steered from the same lookahead the follower is
+holding station against.
+
+PPO_RESULTS_PLACEHOLDER
+
+### Where the next phases plug in
+
+* **Spiking actor**: replace `formation_rl/actor.py` only -- see NEXT PHASES.
+* **Per-robot learned transmission policy**: each `comm_interface_node` already
+  owns its own policy instance; `reward.w_comm` is already plumbed and already
+  counts both robots. The controller can already see staleness.
+* **Network model**: `formation_core.comm.Channel` is untouched and still
+  dormant.
 
 ## NEXT PHASES
 
 The workspace is laid out so new work lands as new packages beside the existing
 ones, with no restructuring. The interfaces they plug into already exist:
 
-* **RL controller** (Phase 2), e.g. `src/formation_rl/`. Implement
-  `formation_core.controllers.Controller` (`act(obs) -> action`) and register it
-  in the `CONTROLLERS` registry; train against `FastFormationEnv`, whose
-  `reset`/`step` already match Gymnasium. Nothing else changes: the same sweep
-  and Pareto plot compare it against the analytic baseline, and
-  `controller:=rl` runs it in Gazebo.
-* **Spiking controller** (PopSAN-style, SpiNNaker). Same `Controller` slot. The
-  contract was sized for it: 10 inputs and 2 outputs, all in [-1, 1], angles as
-  (sin, cos). Population encoders read the observation directly.
-* **Learned transmission policy.** Implement
+* **Spiking controller** (PopSAN-style, SpiNNaker) -- the next controller step.
+  It replaces **one module**: `formation_rl/actor.py`. Implement `act(obs) ->
+  action` on a population-coded network and nothing in training, evaluation,
+  the ROS nodes or the metrics changes; `RLController(actor=...)` takes any
+  object with that method, and `tests/test_actor_and_policy.py` already proves
+  it with a stand-in. The MLP it replaces is constrained for exactly this:
+  feedforward only, no recurrence, no attention, no normalization layers, tanh
+  in and out, 5.5k parameters. The contract was sized for it too -- 16 inputs
+  and 4 outputs, all in [-1, 1], angles as (sin, cos).
+* **Learned transmission policy** (Phase 4), one **per robot**. Implement
   `formation_core.policies.TransmissionPolicy`; `PolicyContext` already carries
-  what a scheduler needs (prediction error, age, timing). It then appears in the
-  Pareto plot next to the baselines.
+  what a scheduler needs (prediction error, age, timing). Each robot's
+  `comm_interface_node` already owns its own policy instance and its own RNG
+  stream, and `FastFormationEnv` already builds one interface per robot, so
+  giving the two robots different policies is a config change. Turn on
+  `reward.w_comm` (already plumbed, already counting both robots) and the
+  learned policy appears in the Pareto plot next to the baselines. The
+  controller can already see what it needs to cope: `lead_age` and `foll_age`
+  are in the observation.
 * **Network model** (Phase 3: delay, loss, jitter). Implement
   `formation_core.comm.Channel` (`send`/`deliver`) and pass it to
   `CommInterface`. Policies, controllers and metrics need no change --

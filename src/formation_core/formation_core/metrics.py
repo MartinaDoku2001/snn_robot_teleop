@@ -82,7 +82,7 @@ STEP_FIELDS = (
     'follower_x', 'follower_y', 'follower_theta', 'follower_v', 'follower_w',
     'estimate_x', 'estimate_y', 'estimate_theta', 'estimate_v', 'estimate_w',
     'error_longitudinal', 'error_lateral', 'error_heading', 'error_euclidean',
-    'path_error', 'estimate_error', 'prediction_error',
+    'path_error', 'progress', 'estimate_error', 'prediction_error',
     'transmitted', 'received', 'age',
     'follower_estimate_x', 'follower_estimate_y', 'follower_estimate_theta',
     'follower_estimate_v', 'follower_estimate_w',
@@ -131,6 +131,7 @@ class EpisodeRecorder:
             'error_heading': errors['heading'],
             'error_euclidean': errors['euclidean'],
             'path_error': float(info.get('path_error', float('nan'))),
+            'progress': float(info.get('progress', float('nan'))),
             'estimate_error': float(info.get('estimate_error', float('nan'))),
             'prediction_error': float(info.get('prediction_error', float('nan'))),
             'transmitted': int(bool(info.get('transmitted', False))),
@@ -210,6 +211,7 @@ class EpisodeRecorder:
         out['comm_rate_total'] = (
             float((total + follower_total) / (2 * steps)) if steps else float('nan'))
         out['reward_total'] = float(np.nansum(self.column('reward'))) if steps else 0.0
+        out['distance'] = float(np.nansum(self.column('progress'))) if steps else 0.0
 
         transmit_steps = [int(r['step']) for r in self.rows if r['transmitted']]
         intervals = [b - a for a, b in zip(transmit_steps[:-1], transmit_steps[1:])]

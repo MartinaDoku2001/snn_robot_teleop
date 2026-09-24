@@ -80,8 +80,9 @@ class RewardConfig:
 
     Unused by the analytic controller, defined now so the RL phase inherits a
     reward that is already part of the recorded config. Reward is
-    ``-(w_formation * euclidean_error + w_heading * |heading_error|
-    + w_path * leader_path_error + w_comm * messages + w_action * ||action||^2)``.
+    ``w_progress * progress - (w_formation * euclidean_error
+    + w_heading * |heading_error| + w_path * leader_path_error
+    + w_comm * messages + w_action * ||action||^2)``.
 
     ``w_path`` arrived with contract v2.0: the controller now drives the leader,
     so staying on the reference path is its job and has to be paid for. It was
@@ -90,13 +91,31 @@ class RewardConfig:
     ``w_comm`` counts messages summed over BOTH robots. It is 0.0 everywhere in
     Phase 2 and is turned on in Phase 4, but it is plumbed through now so that
     turning it on is a config change rather than a code change.
+
+    ``w_progress`` REWARDS travelling along the reference path, credited as a
+    fraction of the distance a leader cruising at ``leader.target_speed`` would
+    cover, clipped to [-1, 1] so there is no bonus for exceeding the target
+    speed. Without it the task has a trivial optimum: every other term is a
+    penalty, so parking both robots on the path in perfect formation scores ~0
+    and beats actually driving. Under v1.x this could not happen, because the
+    scripted leader always drove and the follower had to keep up; centralizing
+    the controller removed the thing that forced motion.
+
+    ``terminal_penalty`` is charged once when an episode ends EARLY -- the
+    formation broke or the leader lost the path. Every other term is negative,
+    so without it an agent that drives off the path immediately collects less
+    total penalty than one that holds formation for the full episode, and PPO
+    will happily learn to crash on purpose. It is not charged on truncation,
+    which is just the clock running out.
     """
 
     w_formation: float = 1.0
     w_heading: float = 0.1
     w_path: float = 1.0
+    w_progress: float = 0.5
     w_comm: float = 0.0
     w_action: float = 0.0
+    terminal_penalty: float = 50.0
 
 
 @dataclass

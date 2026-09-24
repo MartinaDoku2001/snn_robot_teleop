@@ -91,6 +91,7 @@ class GazeboFormationEnv(FormationEnv):
         self._last_leader_result = None
         self._last_follower_result = None
         self._last_leader_command = (0.0, 0.0)
+        self._arc = 0.0
         self._next_tick = None
 
     # ------------------------------------------------------------- plumbing
@@ -147,6 +148,7 @@ class GazeboFormationEnv(FormationEnv):
         self.step_index = 0
         self._next_tick = None
         self._last_leader_command = (0.0, 0.0)
+        self._arc = self.path.arc_length_at(self.leader_state.xy)
         leader_result = self.leader_comm.update(self.leader_state, time=0.0)
         follower_result = self.follower_comm.update(self.follower_state, time=0.0)
         self._last_leader_result = leader_result
@@ -188,6 +190,10 @@ class GazeboFormationEnv(FormationEnv):
         self.step_index += 1
         time_s = self.step_index * cfg.dt
 
+        arc = self.path.arc_length_at(self.leader_state.xy)
+        progress = self.path.arc_delta(self._arc, arc)
+        self._arc = arc
+
         leader_result = self.leader_comm.update(self.leader_state, time=time_s)
         follower_result = self.follower_comm.update(self.follower_state, time=time_s)
         self._last_leader_result = leader_result
@@ -197,20 +203,25 @@ class GazeboFormationEnv(FormationEnv):
         errors = formation_errors(self.follower_state, self.leader_state, cfg.offset_d)
         path_error = float(self.path.tracking_error(self.leader_state.xy))
         messages = int(leader_result.transmitted) + int(follower_result.transmitted)
-        reward = -(cfg.reward.w_formation * errors['euclidean']
-                   + cfg.reward.w_heading * abs(errors['heading'])
-                   + cfg.reward.w_path * path_error
-                   + cfg.reward.w_comm * messages)
+        cruise = cfg.leader.target_speed * cfg.dt
+        credit = float(np.clip(progress / max(cruise, 1e-9), -1.0, 1.0))
+        reward = (cfg.reward.w_progress * credit
+                  - (cfg.reward.w_formation * errors['euclidean']
+                     + cfg.reward.w_heading * abs(errors['heading'])
+                     + cfg.reward.w_path * path_error
+                     + cfg.reward.w_comm * messages))
         terminated = bool(
             errors['euclidean'] > cfg.max_formation_error
             or path_error > cfg.max_path_error)
         truncated = bool(self.step_index >= cfg.steps)
+        if terminated:
+            reward -= cfg.reward.terminal_penalty
         return obs, reward, terminated, truncated, self._info(
             leader_result, follower_result, action=action, reward=reward,
-            errors=errors, path_error=path_error)
+            errors=errors, path_error=path_error, progress=progress)
 
     def _info(self, leader_result, follower_result, action, reward,
-              errors=None, path_error=None):
+              errors=None, path_error=None, progress=0.0):
         leader = self.leader_state
         follower = self.follower_state
         if errors is None:
@@ -238,6 +249,7 @@ class GazeboFormationEnv(FormationEnv):
                          + int(follower_result.transmitted)),
             'errors': errors,
             'path_error': path_error,
+            'progress': progress,
             'leader_command': self._last_leader_command,
             'action': np.asarray(action, dtype=float).reshape(-1).copy(),
             'reward': reward,

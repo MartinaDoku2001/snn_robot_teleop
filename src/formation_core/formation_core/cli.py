@@ -23,6 +23,50 @@ def _policy_override(args):
     return {'policy': ComponentConfig(args.policy, params)}
 
 
+def _controller_override(args):
+    """``--controller`` plus, for a learned one, which weights it runs."""
+    name = getattr(args, 'controller', None)
+    if not name:
+        return {}
+    _ensure_registered(name)
+    params = {}
+    weights = getattr(args, 'weights', None)
+    if weights:
+        params['weights'] = weights
+    return {'controller': ComponentConfig(name, params)}
+
+
+def _ensure_registered(name):
+    """Import the optional package that provides ``name``, if there is one.
+
+    ``formation_core`` has no dependency on the learned controllers and never
+    imports them at module load. This is the one place it will go looking, on
+    demand, so ``--controller rl`` works without the caller having to import
+    ``formation_rl`` first.
+    """
+    from .controllers import CONTROLLERS
+
+    if name in CONTROLLERS:
+        return
+    provider = {'rl': 'formation_rl', 'snn': 'formation_snn'}.get(name)
+    if provider is None:
+        return
+    try:
+        __import__(provider)
+    except ImportError as exc:
+        raise SystemExit(
+            f'controller {name!r} needs the {provider!r} package, which failed '
+            f'to import: {exc}') from None
+
+
+def _add_controller_args(parser):
+    parser.add_argument(
+        '--controller',
+        help="override the controller ('analytic', 'zero', or 'rl' from formation_rl)")
+    parser.add_argument(
+        '--weights', help='learned controller: path to a trained actor')
+
+
 def _add_policy_args(parser):
     parser.add_argument(
         '--policy', choices=['always', 'periodic', 'random', 'event_triggered'],
@@ -42,10 +86,11 @@ def main_run(argv=None):
     parser.add_argument('--out', default='results/episode', help='output directory')
     parser.add_argument('--plot', action='store_true', help='write figures too')
     _add_policy_args(parser)
+    _add_controller_args(parser)
     args = parser.parse_args(argv)
 
     config = EpisodeConfig.from_yaml(args.config)
-    overrides = _policy_override(args)
+    overrides = dict(_policy_override(args), **_controller_override(args))
     if args.seed is not None:
         overrides['seed'] = args.seed
     if args.duration is not None:
@@ -91,13 +136,19 @@ def main_suite(argv=None):
         '--suite', default=config_path('eval_suite.yaml'), help='suite YAML')
     parser.add_argument('--out', default='results/suite', help='output directory')
     _add_policy_args(parser)
+    _add_controller_args(parser)
     args = parser.parse_args(argv)
 
     suite = SuiteConfig.from_yaml(args.suite)
-    overrides = _policy_override(args)
+    overrides = dict(_policy_override(args), **_controller_override(args))
     os.makedirs(args.out, exist_ok=True)
 
-    label = overrides['policy'].describe() if overrides else suite.episode.policy.describe()
+    if 'controller' in overrides:
+        label = overrides['controller'].describe()
+    elif 'policy' in overrides:
+        label = overrides['policy'].describe()
+    else:
+        label = suite.episode.policy.describe()
     print(f'suite {suite.name!r}: {len(suite.seeds)} seeds, policy {label}')
     results = run_suite(
         suite, label=label, overrides=overrides,
