@@ -568,9 +568,22 @@ communication interfaces and the one controller:
 
 ```bash
 ros2 launch formation_gazebo formation.launch.py                    # analytic
-ros2 launch formation_gazebo formation.launch.py controller:=rl     # learned
+ros2 launch formation_gazebo formation.launch.py \
+    controller:=rl weights:=/ws/results/rl/actor.pt                 # learned
 ./scripts/formation_smoke.sh                                        # headless check
 POLICY=always ./scripts/formation_smoke.sh                          # perfect comms
+```
+
+`weights:=` is worth passing explicitly: without it the learned controller
+falls back to a path relative to the working directory, which is fine from a
+shell and unreliable under a launch file.
+
+```bash
+# topics, for reference
+/formation/robot1/estimate  /formation/robot1/age  /formation/robot1/transmitted
+/formation/robot2/estimate  /formation/robot2/age  /formation/robot2/transmitted
+/formation/observation  (16)   /formation/action  (4)
+/formation/reference_path  /formation/lookahead
 ```
 
 ### Results

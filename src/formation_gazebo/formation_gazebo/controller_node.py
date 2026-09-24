@@ -38,11 +38,24 @@ from std_msgs.msg import Float32MultiArray, Int32
 
 from formation_core.config import ComponentConfig, EpisodeConfig
 from formation_core.contract import build_observation, scale_action
-from formation_core.controllers import make_controller
+from formation_core.controllers import CONTROLLERS, make_controller
 from formation_core.dynamics import NoiseProcess
 from formation_core.paths import make_path
 
 from .ros_interface import RobotBridge, announce, odometry_to_state
+
+
+#: Optional packages that register a controller when imported.
+CONTROLLER_PROVIDERS = {'rl': 'formation_rl', 'snn': 'formation_snn'}
+
+
+def _import_provider(name):
+    provider = CONTROLLER_PROVIDERS.get(name)
+    if provider is None:
+        return
+    import importlib
+
+    importlib.import_module(provider)
 
 
 class ControllerNode(Node):
@@ -53,6 +66,11 @@ class ControllerNode(Node):
         self.declare_parameter('leader_namespace', 'robot1')
         self.declare_parameter('follower_namespace', 'robot2')
         self.declare_parameter('controller', '')
+        #: Learned controllers only: which trained actor to run. Left empty,
+        #: RLController falls back to its own default path, which depends on
+        #: the working directory -- fine from a shell, unreliable under a
+        #: launch file, so the launch file passes this explicitly.
+        self.declare_parameter('weights', '')
         # Stop commanding if either estimate stream dies, rather than driving
         # on stale data forever.
         self.declare_parameter('estimate_timeout', 1.0)
@@ -70,7 +88,16 @@ class ControllerNode(Node):
         if seed >= 0:
             self.config = self.config.with_overrides(seed=seed)
         name = self.get_parameter('controller').value or self.config.controller.name
-        params = self.config.controller.params if name == self.config.controller.name else {}
+        params = dict(
+            self.config.controller.params
+            if name == self.config.controller.name else {})
+        weights = self.get_parameter('weights').value
+        if weights:
+            params['weights'] = weights
+        if name not in CONTROLLERS:
+            # Importing the provider is what registers a learned controller;
+            # formation_core never imports it for us.
+            _import_provider(name)
         # The REQUESTED component, as the fast twin records it: the constructed
         # controller would also carry its default gains, and the two backends'
         # CSVs have to stay comparable string-for-string.

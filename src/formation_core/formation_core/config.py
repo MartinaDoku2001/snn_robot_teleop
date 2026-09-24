@@ -102,11 +102,14 @@ class RewardConfig:
     the controller removed the thing that forced motion.
 
     ``terminal_penalty`` is charged once when an episode ends EARLY -- the
-    formation broke or the leader lost the path. Every other term is negative,
-    so without it an agent that drives off the path immediately collects less
-    total penalty than one that holds formation for the full episode, and PPO
-    will happily learn to crash on purpose. It is not charged on truncation,
-    which is just the clock running out.
+    formation broke or the leader lost the path. It is not charged on
+    truncation, which is just the clock running out.
+
+    It is deliberately MODEST. Most of the cost of crashing is already the
+    progress reward it forfeits for the rest of the episode, which the value
+    function accounts for on its own. An earlier 50.0 was large enough to
+    dominate every other term during early exploration -- a policy crashing
+    every ~17 steps saw -2.5 per step and never discovered driving at all.
     """
 
     w_formation: float = 1.0
@@ -115,7 +118,7 @@ class RewardConfig:
     w_progress: float = 0.5
     w_comm: float = 0.0
     w_action: float = 0.0
-    terminal_penalty: float = 50.0
+    terminal_penalty: float = 10.0
 
 
 @dataclass

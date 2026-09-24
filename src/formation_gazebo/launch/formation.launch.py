@@ -11,7 +11,8 @@ an empty arena) and the formation nodes on top of it:
 
   ros2 launch formation_gazebo formation.launch.py
   ros2 launch formation_gazebo formation.launch.py policy:=event_triggered delta:=0.05
-  ros2 launch formation_gazebo formation.launch.py controller:=rl
+  ros2 launch formation_gazebo formation.launch.py controller:=rl \
+      weights:=/ws/results/rl/actor.pt
   ros2 launch formation_gazebo formation.launch.py gui:=false duration:=30.0
 
 Set ``sim:=false`` to attach to a simulation that is already running.
@@ -66,7 +67,8 @@ def launch_setup(context):
              parameters=[dict(common,
                               leader_namespace=leader_ns,
                               follower_namespace=follower_ns,
-                              controller=LaunchConfiguration('controller').perform(context))]),
+                              controller=LaunchConfiguration('controller').perform(context),
+                              weights=LaunchConfiguration('weights').perform(context))]),
         Node(package='formation_gazebo', executable='evaluation_node',
              name='formation_evaluation', output='screen',
              parameters=[dict(common,
@@ -110,6 +112,8 @@ def generate_launch_description():
         DeclareLaunchArgument('p', default_value='-1.0'),
         DeclareLaunchArgument('delta', default_value='-1.0'),
         DeclareLaunchArgument('controller', default_value=''),
+        DeclareLaunchArgument('weights', default_value='',
+                              description='learned controller: trained actor path'),
         DeclareLaunchArgument('seed', default_value='0'),
         DeclareLaunchArgument('duration', default_value='-1.0',
                               description='override the episode duration (s)'),
